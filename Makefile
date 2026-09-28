@@ -354,6 +354,8 @@ build-current:
 
 # Create release build
 ## release: Create optimized release build for all platforms
+release: clean fmt vet lint test
+	@echo Creating release builds...
 	@CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build $(RELEASE_LDFLAGS) -a -installsuffix cgo -trimpath -o $(LINUX_DIR)/$(BINARY_NAME)-amd64 $(MAIN_PATH)
 	@CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build $(RELEASE_LDFLAGS) -a -installsuffix cgo -trimpath -o $(LINUX_DIR)/$(BINARY_NAME)-arm64 $(MAIN_PATH)
 	@CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build $(RELEASE_LDFLAGS) -a -installsuffix cgo -trimpath -o $(DARWIN_DIR)/$(BINARY_NAME)-amd64 $(MAIN_PATH)
