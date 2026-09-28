@@ -200,7 +200,8 @@ its messages being queued indefinitely.
 **Startup** (`New`, then `Run`): `New` hands the config to the hub, which resolves and keeps it,
 builds the mux, and constructs the `http.Server` with 15s read/write and 60s idle timeouts. `Run` starts the hub
 goroutine, calls `ListenAndServe` in a goroutine, and blocks on either a listener error or the
-context being done.
+context being done. A listener error drains the hub before `Run` returns it, so a failed listen
+leaves no goroutines behind.
 
 **Shutdown**, on cancellation, in strict order with a 30-second overall cap. `Run` builds one
 `context.Context` carrying that cap and derives a 15-second child for each stage, so a stage that

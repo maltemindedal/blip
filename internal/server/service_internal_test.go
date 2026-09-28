@@ -4,8 +4,12 @@
 package server
 
 import (
+	"context"
+	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -139,5 +143,43 @@ func TestNewListensOnTheResolvedPort(t *testing.T) {
 				t.Errorf("Expected addr %q for port %q, got %q", tt.want, tt.port, got)
 			}
 		})
+	}
+}
+
+// TestRunDrainsTheHubWhenTheListenerFails pins that a listener failure does not
+// leave the hub's goroutines running behind it, and that the listen error stays
+// reachable through the error Run returns.
+func TestRunDrainsTheHubWhenTheListenerFails(t *testing.T) {
+	t.Parallel()
+
+	occupied, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Failed to occupy a port: %v", err)
+	}
+	t.Cleanup(func() { _ = occupied.Close() })
+
+	cfg := NewConfig()
+	cfg.Port = occupied.Addr().String()
+	svc := New(cfg)
+
+	// A deadline, so a regression that lets the listen succeed fails here instead
+	// of blocking until the test binary times out.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	runErr := svc.Run(ctx)
+
+	if runErr == nil {
+		t.Fatal("Expected Run to fail on an occupied port")
+	}
+	if !strings.HasPrefix(runErr.Error(), "http server: listen and serve: ") {
+		t.Errorf("Unexpected error text %q", runErr)
+	}
+	var opErr *net.OpError
+	if !errors.As(runErr, &opErr) {
+		t.Errorf("Expected the listen error to stay reachable, got %v", runErr)
+	}
+	if !svc.Hub().IsStopped() {
+		t.Error("Expected the hub to be stopped after the listener failed")
 	}
 }

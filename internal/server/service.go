@@ -58,9 +58,10 @@ func (s *Service) Hub() *Hub {
 }
 
 // Run starts the hub and serves HTTP until the listener fails or ctx is done.
-// A listener failure is returned as-is. Cancelling ctx drains the service and
-// returns nil once it has stopped, or the drain's error if a stage overran its
-// budget.
+// A listener failure drains the hub, so nothing outlives the call, and is
+// returned wrapped, joined with the drain's error if that overran its budget.
+// Cancelling ctx drains the service and returns nil once it has stopped, or the
+// drain's error if a stage overran its budget.
 func (s *Service) Run(ctx context.Context) error {
 	s.hub.Start()
 	log().Info("hub started and ready to manage WebSocket connections")
@@ -80,7 +81,10 @@ func (s *Service) Run(ctx context.Context) error {
 	select {
 	case err := <-serverErrors:
 		if err != nil {
-			return fmt.Errorf("http server: %w", err)
+			// The hub is already running, so a listener failure must drain it
+			// rather than leave its goroutines behind.
+			hubErr := withStageDeadline(context.Background(), s.hub.Shutdown)
+			return errors.Join(fmt.Errorf("http server: %w", err), hubErr)
 		}
 		return nil
 
