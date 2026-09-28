@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 
 	"github.com/gorilla/websocket"
 )
@@ -72,8 +73,7 @@ type Hub struct {
 	shutdown     chan struct{}
 	shutdownOnce sync.Once
 	done         chan struct{}
-	stateMu      sync.Mutex
-	started      bool
+	started      atomic.Bool
 }
 
 // NewHub creates and initializes a new Hub instance with all necessary channels
@@ -169,7 +169,7 @@ func (h *Hub) ClientCount() int {
 // signal it, rather than return early and leave a loop that starts afterwards to
 // run for good.
 func (h *Hub) Start() {
-	if h.markStarted() {
+	if h.started.CompareAndSwap(false, true) {
 		go h.run()
 	}
 }
@@ -182,25 +182,6 @@ func (h *Hub) IsStopped() bool {
 	default:
 		return false
 	}
-}
-
-func (h *Hub) markStarted() bool {
-	h.stateMu.Lock()
-	defer h.stateMu.Unlock()
-
-	if h.started {
-		return false
-	}
-
-	h.started = true
-	return true
-}
-
-func (h *Hub) hasStarted() bool {
-	h.stateMu.Lock()
-	defer h.stateMu.Unlock()
-
-	return h.started
 }
 
 // run is the hub's main event loop, handling client registration,
@@ -305,7 +286,7 @@ func (h *Hub) shutdownClients() {
 // have finished, or when ctx is done — whichever comes first. Both stages share
 // the one deadline carried by ctx.
 func (h *Hub) Shutdown(ctx context.Context) error {
-	if !h.hasStarted() {
+	if !h.started.Load() {
 		return nil
 	}
 
