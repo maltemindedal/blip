@@ -53,7 +53,7 @@ DWARF data.
 | `test-coverage-unit`         | Same, unit tests only → `unit-coverage.*`                         |
 | `test-coverage-integration`  | Same, integration tests only → `integration-coverage.*`           |
 | `race`                       | `go test -race ./...` without `-v`                                |
-| `bench`                      | `go test -bench=. -benchmem ./...` — hot-path benchmarks in `internal/server` |
+| `bench`                      | `go test -run '^$' -bench=. -benchmem ./...` — hot-path benchmarks in `internal/server` |
 
 ## Quality and dependencies
 

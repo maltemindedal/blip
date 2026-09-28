@@ -240,7 +240,7 @@ license-check:
 ## bench: Run performance benchmarks
 bench:
 	@echo "Running benchmarks..."
-	go test -bench=. -benchmem ./...
+	go test -run '^$$' -bench=. -benchmem ./...
 
 # Check for potential race conditions
 ## race: Run tests with race detection

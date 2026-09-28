@@ -154,9 +154,10 @@ Follow the conventions already in the suite:
 
 ### Benchmarks
 
-`make bench` runs `go test -bench=. -benchmem ./...`. The benchmarks live alongside the code they
-measure, in `internal/server/*_internal_test.go`, because they exercise unexported hot paths:
-broadcast fan-out, message normalization, the rate limiter, and origin checks.
+`make bench` runs `go test -run '^$' -bench=. -benchmem ./...`; `-run '^$'` skips the tests so only
+the benchmarks execute. The benchmarks live alongside the code they measure, in
+`internal/server/*_internal_test.go`, because they exercise unexported hot paths: broadcast fan-out,
+message normalization, the rate limiter, and origin checks.
 
 `BenchmarkHubBroadcast` builds its client set with `newBenchHub`, which installs fakes through the
 hub's own registration path rather than writing the client map behind its back, so the fan-out it
