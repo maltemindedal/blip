@@ -32,6 +32,7 @@ linters:
     - perfsprint # Faster alternatives to fmt.Sprintf
     - sloglint # Consistent log/slog usage
     - nolintlint # Well-formed, justified nolint directives
+    - modernize # Newer standard-library and language idioms (a superset of what `go fix` rewrites)
 
     # Tests
     - thelper # t.Helper() in test helpers

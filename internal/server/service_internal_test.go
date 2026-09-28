@@ -175,8 +175,7 @@ func TestRunDrainsTheHubWhenTheListenerFails(t *testing.T) {
 	if !strings.HasPrefix(runErr.Error(), "http server: listen and serve: ") {
 		t.Errorf("Unexpected error text %q", runErr)
 	}
-	var opErr *net.OpError
-	if !errors.As(runErr, &opErr) {
+	if _, ok := errors.AsType[*net.OpError](runErr); !ok {
 		t.Errorf("Expected the listen error to stay reachable, got %v", runErr)
 	}
 	if !svc.Hub().IsStopped() {
