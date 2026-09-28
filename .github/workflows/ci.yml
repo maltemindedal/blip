@@ -97,7 +97,7 @@ jobs:
       # Pinned like every other tool in this workflow, so a govulncheck release
       # cannot change the result of a rerun of an old commit.
       - name: Run govulncheck
-        run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
 
   docker:
     name: Docker Build and Scan

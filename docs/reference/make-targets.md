@@ -71,8 +71,8 @@ DWARF data.
 | `all`           | `clean fmt vet lint test build`                                  |
 | `ci-local`      | `clean fmt vet lint test-coverage security-scan deps-check build` |
 
-`install-tools` installs golangci-lint (pinned to the version CI uses), govulncheck, gosec,
-goimports, and air with `go install`.
+`install-tools` installs golangci-lint, govulncheck, gosec, goimports, and air with `go install`,
+each at a pinned version (golangci-lint and govulncheck at the versions CI uses).
 
 `docs` starts a local `godoc` server on <http://localhost:6060>.
 
