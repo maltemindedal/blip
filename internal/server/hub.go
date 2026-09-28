@@ -238,11 +238,9 @@ func (h *Hub) addClient(client clientConn) {
 	h.clients[client] = client.inbox()
 	log().Info("client registered", "addr", client.remoteAddr(), "total_clients", len(h.clients))
 
-	h.wg.Add(1)
-	go func() {
-		defer h.wg.Done()
+	h.wg.Go(func() {
 		client.serve()
-	}()
+	})
 }
 
 // removeClient unregisters a client and closes its inbox. It is a no-op for
