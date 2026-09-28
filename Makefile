@@ -203,7 +203,7 @@ ci-local: clean fmt vet lint test-coverage security-scan deps-check build
 ## install-tools: Install development tools
 install-tools:
 	@echo "Installing development tools..."
-	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
+	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2
 	go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
 	go install github.com/securego/gosec/v2/cmd/gosec@v2.29.0
 	go install golang.org/x/tools/cmd/goimports@v0.50.0

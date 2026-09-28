@@ -119,7 +119,7 @@ issues. CI must be green and a maintainer must approve before merge.
 | ------------ | ----------------------------------------------------------------------------- |
 | `test`       | Verifies the module is tidy, builds, runs `go test -race -shuffle=on` with coverage, uploads to Codecov |
 | `bench`      | Runs every benchmark once as a compile-and-run smoke test                      |
-| `lint`       | golangci-lint v2.12.2 against `.golangci.yml`                                  |
+| `lint`       | golangci-lint v2.13.2 against `.golangci.yml`                                  |
 | `vulncheck`  | `govulncheck ./...`                                                            |
 | `docker`     | Builds the image and scans it with Trivy, uploading SARIF to the Security tab   |
 
