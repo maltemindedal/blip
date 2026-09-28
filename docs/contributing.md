@@ -78,8 +78,9 @@ in `internal/server`:
 
 Linters enabled in `.golangci.yml`, grouped as the file groups them:
 
-- **Correctness** — `errcheck`, `govet`, `staticcheck`, `unused`, `ineffassign`, `bodyclose`,
-  `errorlint`, `errname`, `wastedassign`, `nilerr`
+- **Correctness** — `errcheck`, `govet` (with `nilness`, `shadow`, `unusedwrite` and `sortslice` on
+  top of its defaults), `staticcheck`, `unused`, `ineffassign`, `bodyclose`, `errorlint`,
+  `errname`, `wastedassign`, `nilerr`
 - **Security** — `gosec`
 - **Style and modernization** — `revive`, `misspell`, `unconvert`, `copyloopvar`, `intrange`,
   `usestdlibvars`, `perfsprint`, `sloglint`, `nolintlint`

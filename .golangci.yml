@@ -38,6 +38,15 @@ linters:
     - usetesting # Prefer t.Context, t.Chdir, t.Setenv over manual equivalents
 
   settings:
+    govet:
+      # On top of the default analyzers: nil dereferences, shadowed variables
+      # (an inner `err :=` hiding the outer one), struct writes that are dropped,
+      # and malformed sort.Slice arguments.
+      enable:
+        - nilness
+        - shadow
+        - unusedwrite
+        - sortslice
     sloglint:
       # Attributes must be key-value pairs; keys are static snake_case strings.
       kv-only: true
