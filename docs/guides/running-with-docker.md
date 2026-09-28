@@ -109,8 +109,9 @@ docker inspect --format='{{.State.Health.Status}}' blip-server
 docker exec -it blip-server /bin/sh
 ```
 
-The container writes plain-text logs to stdout with no log levels, so ship them straight to your log
-collector via the Docker logging driver.
+The container writes `log/slog` text records (`key=value`, each with a `level=`) to stderr, which
+`LOG_LEVEL` controls; the Docker logging driver captures both streams, so ship them straight to your
+log collector.
 
 ## Related
 

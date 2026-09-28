@@ -56,6 +56,9 @@ Specifics:
 `scheme://host` with scheme and host lowercased, then compared exactly.
 
 - The port is part of the host: `http://localhost:8080` does not match `http://localhost:3000`.
+- Default ports are not normalized. Browsers leave `:443` (https) and `:80` (http) out of `Origin`,
+  so list `https://example.com`, not `https://example.com:443`: the latter never matches a browser
+  and its handshake gets a `403`.
 - Paths are ignored: `https://example.com/app` is stored as `https://example.com`.
 - Entries with no scheme or no host (`example.com`, `localhost:8080`) are rejected when the hub is
   built, with an `ignoring invalid origin in configuration` warning.

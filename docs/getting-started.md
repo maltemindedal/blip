@@ -120,7 +120,7 @@ messages/second per connection. All five settings are environment variables — 
 Something else holds port 8080. Find it with `lsof -i :8080` (macOS/Linux) or
 `netstat -ano | findstr :8080` (Windows), or move Blip: `SERVER_PORT=:9090 ./bin/blip`.
 
-**The test page says "Connection error" and the log says `Blocked WebSocket connection from disallowed origin`**
+**The test page says "Connection error" and the log says `blocked WebSocket connection from disallowed origin`**
 You reached the page at a hostname other than `localhost:8080` — `127.0.0.1:8080` counts as a
 different origin. Either use `http://localhost:8080/test` or allow the origin you are using:
 

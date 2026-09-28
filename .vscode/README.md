@@ -36,13 +36,6 @@ Both should run without errors.
    - Added schema overrides
    - These may reduce but not eliminate the false warnings
 
-2. **YAML Language Server Directive**
-
-   - Added `# yaml-language-server: $schema=null` to disable schema validation for the file
-
-3. **Documentation**
-   - Added clear comments in the `.golangci.yml` file explaining the issue
-
 ### Recommendation
 
 **Ignore the VS Code YAML validation errors** for `.golangci.yml`. They are cosmetic only and do not affect functionality. The golangci-lint tool itself is the authoritative validator for its configuration format.
