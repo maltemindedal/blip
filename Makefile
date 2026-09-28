@@ -18,7 +18,6 @@ endif
 BINARY_NAME=blip
 BUILD_DIR=./bin
 MAIN_PATH=./cmd/server
-GO_FILES=$(shell find . -name '*.go' -not -path './vendor/*' 2>/dev/null || dir /s /b *.go 2>nul | findstr /v "\\vendor\\")
 COVERAGE_FILE=coverage.out
 COVERAGE_HTML=coverage.html
 
