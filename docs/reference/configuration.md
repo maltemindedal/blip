@@ -39,7 +39,9 @@ Specifics:
 - `SERVER_PORT` — a value with no `:` is treated as a bare port and rewritten with a leading colon,
   so `SERVER_PORT=9000` and `SERVER_PORT=:9000` are equivalent. `127.0.0.1:9000` binds to loopback only.
 - `MAX_MESSAGE_SIZE`, `RATE_LIMIT_BURST`, `RATE_LIMIT_REFILL_INTERVAL` — must parse as integers
-  greater than zero. Zero, negatives, and non-numeric values fall back to the default.
+  greater than zero. Zero, negatives, non-numeric values, and values too large to represent (a
+  `RATE_LIMIT_REFILL_INTERVAL` above 9,223,372,036 seconds, or, on a 32-bit platform, a
+  `RATE_LIMIT_BURST` above the platform's `int`) fall back to the default with a `WARN`.
 - `RATE_LIMIT_REFILL_INTERVAL` is parsed with `strconv.Atoi` and multiplied by `time.Second`.
   Duration strings such as `500ms` or `1s` are **invalid** and fall back to the default.
 - `LOG_LEVEL` accepts the names `log/slog` understands, case-insensitively, including offsets such
