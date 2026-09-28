@@ -187,13 +187,3 @@ func SendMessage(conn *websocket.Conn, content string) error {
 	message := map[string]string{"content": content}
 	return conn.WriteJSON(message)
 }
-
-// CloseWebSocket gracefully closes a WebSocket connection.
-func CloseWebSocket(conn *websocket.Conn) error {
-	err := conn.WriteMessage(websocket.CloseMessage,
-		websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
-	if err != nil {
-		return err
-	}
-	return conn.Close()
-}

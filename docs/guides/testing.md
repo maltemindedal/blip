@@ -107,7 +107,6 @@ coverage.
 | `DialPair(t, wsURL, origin)`                      | The sender/receiver pair delivery tests need                         |
 | `ConnectWebSocket(url)`                           | Dial with the default dev origin; returns an error instead of failing |
 | `SendMessage(conn, content)`                      | Send `{"content": ...}`                                              |
-| `CloseWebSocket(conn)`                            | Close cleanly                                                        |
 | `MakeRequest(t, method, url)`                     | HTTP request, fully read; returns a `Response` with the body closed  |
 | `AssertStatusCode` / `AssertContentType` / `AssertBody` | Common assertions over a `Response`                            |
 
