@@ -163,8 +163,15 @@ func (h *Hub) ClientCount() int {
 }
 
 // Start launches the hub event loop in a goroutine if it is not already running.
+//
+// The started flag is set here, before the goroutine exists, not inside it: a
+// [Hub.Shutdown] issued straight after Start must see the loop as started and
+// signal it, rather than return early and leave a loop that starts afterwards to
+// run for good.
 func (h *Hub) Start() {
-	go h.run()
+	if h.markStarted() {
+		go h.run()
+	}
 }
 
 // IsStopped reports whether the hub event loop has exited.
@@ -200,10 +207,6 @@ func (h *Hub) hasStarted() bool {
 // unregistration, and message broadcasting. It runs until shutdown is signalled
 // and is launched in its own goroutine by [Hub.Start].
 func (h *Hub) run() {
-	if !h.markStarted() {
-		return
-	}
-
 	defer close(h.done)
 
 	for {

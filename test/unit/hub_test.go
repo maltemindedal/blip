@@ -165,6 +165,30 @@ func TestHubShutdownBeforeStartIsNoOp(t *testing.T) {
 	}
 }
 
+// TestHubShutdownRightAfterStartStopsTheHub verifies that Shutdown called
+// straight after Start stops the event loop, instead of returning nil because
+// the loop's goroutine had not been scheduled yet and then leaving it running
+// for good. The hub is shut down at once, with no barrier in between, because
+// that is the case being pinned.
+func TestHubShutdownRightAfterStartStopsTheHub(t *testing.T) {
+	t.Parallel()
+
+	const rounds = 200
+
+	for range rounds {
+		hub := server.NewHub(nil)
+		hub.Start()
+
+		if err := shutdownHub(t, hub); err != nil {
+			t.Fatalf(shutdownErrorMsg, err)
+		}
+
+		if !hub.IsStopped() {
+			t.Fatal("Hub kept running after Shutdown returned straight after Start")
+		}
+	}
+}
+
 // TestHubShutdownIsIdempotent verifies that concurrent and repeated Shutdown
 // calls are safe and all report success.
 func TestHubShutdownIsIdempotent(t *testing.T) {
