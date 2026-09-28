@@ -4,7 +4,7 @@ Build Blip, run it, and watch two browser tabs chat with each other. About 10 mi
 
 ## Prerequisites
 
-- **Go 1.26.5 or later** — check with `go version`. An older toolchain works too; Go downloads the
+- **Go 1.26.8 or later** — check with `go version`. An older toolchain works too; Go downloads the
   version named in `go.mod` automatically.
 - **Git**
 - **GNU Make** (optional — every step below also shows the plain `go` command)

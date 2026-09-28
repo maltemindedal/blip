@@ -5,7 +5,7 @@ and how a pull request gets reviewed.
 
 ## Development setup
 
-Prerequisites: Go 1.26.5 or later, Git, and optionally GNU Make.
+Prerequisites: Go 1.26.8 or later, Git, and optionally GNU Make.
 
 ```bash
 git clone https://github.com/maltemindedal/blip.git
@@ -128,7 +128,8 @@ Every job fails the run on its own, so there is no separate gate job. Runs are g
 
 The Go version comes from `go.mod` via `go-version-file`, so the workflow never needs its own pin.
 `govulncheck` reports vulnerabilities in the Go toolchain itself, so a stdlib advisory fails CI until
-the toolchain is raised — and that means `go.mod`, `Dockerfile`, and `README.md` together.
+the toolchain is raised — and that means `go.mod`, `Dockerfile`, `README.md`, and every page under
+`docs/` that names the version, together (`git grep` the old version to find them).
 
 ## Reporting issues
 

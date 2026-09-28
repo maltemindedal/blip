@@ -110,7 +110,7 @@ CI runs `govulncheck ./...` on every push and pull request to `main` and `develo
 of golangci-lint, and Trivy against the built image, uploading its findings to the repository's
 Security tab. Any of these failing fails the run. `govulncheck` reports vulnerabilities in the Go
 toolchain itself, so a stdlib advisory fails CI until the Go version is bumped in `go.mod` — which
-CI reads directly — plus the `Dockerfile` and the README.
+CI reads directly — plus the `Dockerfile`, the README, and the docs that name the version.
 
 ## Production checklist
 
