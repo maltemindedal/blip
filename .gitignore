@@ -34,5 +34,13 @@ go.work.sum
 # .idea/
 # .vscode/
 
-# unit-coverage
+# Per-suite coverage reports (`make test-coverage-unit`, `make test-coverage-integration`)
 unit-coverage.html
+integration-coverage.html
+
+# Output of `make license-check` and `make deps-graph`
+licenses.txt
+deps-graph.png
+
+# Air's build output (`make dev`)
+tmp/
