@@ -56,7 +56,6 @@ all six platforms with:
 - `CGO_ENABLED=0` — static binary, runs on any distro and in `scratch`/`alpine` images
 - `-trimpath` — no local filesystem paths in the binary, reproducible across machines
 - `-ldflags="-s -w"` — symbol table and DWARF data stripped, roughly 30% smaller
-- `-a -installsuffix cgo` — force a full rebuild of all packages
 
 It then writes `checksums.txt` (SHA256) into each platform directory:
 

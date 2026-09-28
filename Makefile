@@ -356,12 +356,12 @@ build-current:
 ## release: Create optimized release build for all platforms
 release: clean fmt vet lint test
 	@echo Creating release builds...
-	@CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build $(RELEASE_LDFLAGS) -a -installsuffix cgo -trimpath -o $(LINUX_DIR)/$(BINARY_NAME)-amd64 $(MAIN_PATH)
-	@CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build $(RELEASE_LDFLAGS) -a -installsuffix cgo -trimpath -o $(LINUX_DIR)/$(BINARY_NAME)-arm64 $(MAIN_PATH)
-	@CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build $(RELEASE_LDFLAGS) -a -installsuffix cgo -trimpath -o $(DARWIN_DIR)/$(BINARY_NAME)-amd64 $(MAIN_PATH)
-	@CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build $(RELEASE_LDFLAGS) -a -installsuffix cgo -trimpath -o $(DARWIN_DIR)/$(BINARY_NAME)-arm64 $(MAIN_PATH)
-	@CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build $(RELEASE_LDFLAGS) -a -installsuffix cgo -trimpath -o $(WINDOWS_DIR)/$(BINARY_NAME)-amd64.exe $(MAIN_PATH)
-	@CGO_ENABLED=0 GOOS=windows GOARCH=arm64 go build $(RELEASE_LDFLAGS) -a -installsuffix cgo -trimpath -o $(WINDOWS_DIR)/$(BINARY_NAME)-arm64.exe $(MAIN_PATH)
+	@CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build $(RELEASE_LDFLAGS) -trimpath -o $(LINUX_DIR)/$(BINARY_NAME)-amd64 $(MAIN_PATH)
+	@CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build $(RELEASE_LDFLAGS) -trimpath -o $(LINUX_DIR)/$(BINARY_NAME)-arm64 $(MAIN_PATH)
+	@CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build $(RELEASE_LDFLAGS) -trimpath -o $(DARWIN_DIR)/$(BINARY_NAME)-amd64 $(MAIN_PATH)
+	@CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build $(RELEASE_LDFLAGS) -trimpath -o $(DARWIN_DIR)/$(BINARY_NAME)-arm64 $(MAIN_PATH)
+	@CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build $(RELEASE_LDFLAGS) -trimpath -o $(WINDOWS_DIR)/$(BINARY_NAME)-amd64.exe $(MAIN_PATH)
+	@CGO_ENABLED=0 GOOS=windows GOARCH=arm64 go build $(RELEASE_LDFLAGS) -trimpath -o $(WINDOWS_DIR)/$(BINARY_NAME)-arm64.exe $(MAIN_PATH)
 	@echo Release builds created in $(BUILD_DIR)/
 	@echo Creating checksums...
 	@cd $(LINUX_DIR) && (sha256sum * > checksums.txt 2>/dev/null || shasum -a 256 * > checksums.txt)
