@@ -5,7 +5,7 @@ and how a pull request gets reviewed.
 
 ## Development setup
 
-Prerequisites: Go 1.26.5 or later, Git, and optionally GNU Make.
+Prerequisites: Go 1.26.8 or later, Git, and optionally GNU Make.
 
 ```bash
 git clone https://github.com/maltemindedal/blip.git
@@ -78,11 +78,12 @@ in `internal/server`:
 
 Linters enabled in `.golangci.yml`, grouped as the file groups them:
 
-- **Correctness** — `errcheck`, `govet`, `staticcheck`, `unused`, `ineffassign`, `bodyclose`,
-  `errorlint`, `errname`, `wastedassign`, `nilerr`
+- **Correctness** — `errcheck`, `govet` (with `nilness`, `shadow`, `unusedwrite` and `sortslice` on
+  top of its defaults), `staticcheck`, `unused`, `ineffassign`, `bodyclose`, `errorlint`,
+  `errname`, `wastedassign`, `nilerr`
 - **Security** — `gosec`
 - **Style and modernization** — `revive`, `misspell`, `unconvert`, `copyloopvar`, `intrange`,
-  `usestdlibvars`, `perfsprint`, `sloglint`, `nolintlint`
+  `usestdlibvars`, `perfsprint`, `sloglint`, `nolintlint`, `modernize`
 - **Tests** — `thelper`, `usetesting`
 
 Formatting is enforced separately by the `formatters` block (`gofmt`, `goimports`).
@@ -119,7 +120,7 @@ issues. CI must be green and a maintainer must approve before merge.
 | ------------ | ----------------------------------------------------------------------------- |
 | `test`       | Verifies the module is tidy, builds, runs `go test -race -shuffle=on` with coverage, uploads to Codecov |
 | `bench`      | Runs every benchmark once as a compile-and-run smoke test                      |
-| `lint`       | golangci-lint v2.12.2 against `.golangci.yml`                                  |
+| `lint`       | golangci-lint v2.13.2 against `.golangci.yml`                                  |
 | `vulncheck`  | `govulncheck ./...`                                                            |
 | `docker`     | Builds the image and scans it with Trivy, uploading SARIF to the Security tab   |
 
@@ -128,7 +129,8 @@ Every job fails the run on its own, so there is no separate gate job. Runs are g
 
 The Go version comes from `go.mod` via `go-version-file`, so the workflow never needs its own pin.
 `govulncheck` reports vulnerabilities in the Go toolchain itself, so a stdlib advisory fails CI until
-the toolchain is raised — and that means `go.mod`, `Dockerfile`, and `README.md` together.
+the toolchain is raised — and that means `go.mod`, `Dockerfile`, `README.md`, and every page under
+`docs/` that names the version, together (`git grep` the old version to find them).
 
 ## Reporting issues
 

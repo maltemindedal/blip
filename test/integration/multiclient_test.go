@@ -247,9 +247,9 @@ func readSingleWebSocketMessage(t *testing.T, conn *websocket.Conn, clientIndex 
 // parseMessageContent parses batched messages separated by newlines
 func parseMessageContent(message []byte) []string {
 	var contents []string
-	parts := bytes.Split(message, []byte("\n"))
+	parts := bytes.SplitSeq(message, []byte("\n"))
 
-	for _, part := range parts {
+	for part := range parts {
 		if len(part) == 0 {
 			continue
 		}
@@ -400,9 +400,9 @@ func isFatalWebSocketError(err error) bool {
 
 // messageContainsExpectedContent checks if batched message contains expected content
 func messageContainsExpectedContent(message []byte, expectedContent string) bool {
-	parts := bytes.Split(message, []byte("\n"))
+	parts := bytes.SplitSeq(message, []byte("\n"))
 
-	for _, part := range parts {
+	for part := range parts {
 		if len(part) == 0 {
 			continue
 		}
@@ -505,9 +505,9 @@ func readSingleMessageWithDeadline(t *testing.T, conn *websocket.Conn) ([]byte, 
 // countMessagesInBatch counts valid messages in a batched message payload
 func countMessagesInBatch(message []byte) int {
 	count := 0
-	parts := bytes.Split(message, []byte("\n"))
+	parts := bytes.SplitSeq(message, []byte("\n"))
 
-	for _, part := range parts {
+	for part := range parts {
 		if len(part) == 0 {
 			continue
 		}

@@ -39,8 +39,10 @@ Specifics:
 - `SERVER_PORT` — a value with no `:` is treated as a bare port and rewritten with a leading colon,
   so `SERVER_PORT=9000` and `SERVER_PORT=:9000` are equivalent. `127.0.0.1:9000` binds to loopback only.
 - `MAX_MESSAGE_SIZE`, `RATE_LIMIT_BURST`, `RATE_LIMIT_REFILL_INTERVAL` — must parse as integers
-  greater than zero. Zero, negatives, and non-numeric values fall back to the default.
-- `RATE_LIMIT_REFILL_INTERVAL` is parsed with `strconv.Atoi` and multiplied by `time.Second`.
+  greater than zero. Zero, negatives, non-numeric values, and values too large to represent (a
+  `RATE_LIMIT_REFILL_INTERVAL` above 9,223,372,036 seconds, or, on a 32-bit platform, a
+  `RATE_LIMIT_BURST` above the platform's `int`) fall back to the default with a `WARN`.
+- `RATE_LIMIT_REFILL_INTERVAL` is parsed with `strconv.ParseInt` and multiplied by `time.Second`.
   Duration strings such as `500ms` or `1s` are **invalid** and fall back to the default.
 - `LOG_LEVEL` accepts the names `log/slog` understands, case-insensitively, including offsets such
   as `debug-2`. Anything unrecognized falls back to `info` silently, since the logger does not exist
@@ -54,6 +56,9 @@ Specifics:
 `scheme://host` with scheme and host lowercased, then compared exactly.
 
 - The port is part of the host: `http://localhost:8080` does not match `http://localhost:3000`.
+- Default ports are not normalized. Browsers leave `:443` (https) and `:80` (http) out of `Origin`,
+  so list `https://example.com`, not `https://example.com:443`: the latter never matches a browser
+  and its handshake gets a `403`.
 - Paths are ignored: `https://example.com/app` is stored as `https://example.com`.
 - Entries with no scheme or no host (`example.com`, `localhost:8080`) are rejected when the hub is
   built, with an `ignoring invalid origin in configuration` warning.

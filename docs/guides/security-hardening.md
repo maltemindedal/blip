@@ -16,8 +16,8 @@ Know these before exposing the server:
 - **No per-IP connection limit.** Rate limiting is per connection, so one client can open many
   connections and multiply its budget. Cap concurrent connections per IP at the proxy.
 - **No content filtering.** Message bodies are relayed as-is. The server re-encodes them with
-  `encoding/json`, so HTML metacharacters arrive escaped as `<`/`>`/`&`, but that is
-  a JSON transport detail, not sanitization: a rendering client must still escape on output. The
+  `encoding/json`, so HTML metacharacters arrive escaped as `\u003c`/`\u003e`/`\u0026`, but that
+  is a JSON transport detail, not sanitization: a rendering client must still escape on output. The
   built-in `/test` page uses `textContent` rather than `innerHTML` for exactly this reason.
 - **No audit trail.** Logs are structured key-value records, but carry no request IDs or user
   identity — only the remote address.
@@ -93,9 +93,12 @@ limiting, exceeding it **closes the connection** — the read pump exits with `E
 client is unregistered.
 
 JSON framing counts toward the limit: `{"content":""}` costs 14 bytes, leaving roughly 498 bytes of
-text at the default. Raise it when clients send longer messages, and remember that each connection
-can also queue 256 outbound messages, so `MAX_MESSAGE_SIZE × 256 × connections` bounds worst-case
-buffer memory.
+text at the default. Raise it when clients send longer messages. The limit applies to the inbound
+frame, but the server re-encodes each message before relaying it and escaping can make it up to six
+times longer (`<` becomes the six bytes `\u003c`): a relayed message can reach
+`6 × MAX_MESSAGE_SIZE − 70` bytes, 3002 at the default. Each connection can also queue 256
+outbound messages, so `6 × MAX_MESSAGE_SIZE × 256 × connections` is a loose ceiling on buffered
+payload memory; queued payloads are shared between recipients, so real usage is usually far lower.
 
 ## Automated scanning
 
@@ -108,9 +111,10 @@ gosec ./...          # static analysis for insecure patterns
 
 CI runs `govulncheck ./...` on every push and pull request to `main` and `develop`, `gosec` as part
 of golangci-lint, and Trivy against the built image, uploading its findings to the repository's
-Security tab. Any of these failing fails the run. `govulncheck` reports vulnerabilities in the Go
-toolchain itself, so a stdlib advisory fails CI until the Go version is bumped in `go.mod` — which
-CI reads directly — plus the `Dockerfile` and the README.
+Security tab. `govulncheck` and `gosec` fail the run; Trivy does not, because its findings are
+reported to the Security tab without failing the job. `govulncheck` reports vulnerabilities in the
+Go toolchain itself, so a stdlib advisory fails CI until the Go version is bumped in `go.mod` —
+which CI reads directly — plus the `Dockerfile`, the README, and the docs that name the version.
 
 ## Production checklist
 

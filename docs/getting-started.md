@@ -4,7 +4,7 @@ Build Blip, run it, and watch two browser tabs chat with each other. About 10 mi
 
 ## Prerequisites
 
-- **Go 1.26.5 or later** — check with `go version`. An older toolchain works too; Go downloads the
+- **Go 1.26.8 or later** — check with `go version`. An older toolchain works too; Go downloads the
   version named in `go.mod` automatically.
 - **Git**
 - **GNU Make** (optional — every step below also shows the plain `go` command)
@@ -120,7 +120,7 @@ messages/second per connection. All five settings are environment variables — 
 Something else holds port 8080. Find it with `lsof -i :8080` (macOS/Linux) or
 `netstat -ano | findstr :8080` (Windows), or move Blip: `SERVER_PORT=:9090 ./bin/blip`.
 
-**The test page says "Connection error" and the log says `Blocked WebSocket connection from disallowed origin`**
+**The test page says "Connection error" and the log says `blocked WebSocket connection from disallowed origin`**
 You reached the page at a hostname other than `localhost:8080` — `127.0.0.1:8080` counts as a
 different origin. Either use `http://localhost:8080/test` or allow the origin you are using:
 

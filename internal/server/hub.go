@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 
 	"github.com/gorilla/websocket"
 )
@@ -72,8 +73,7 @@ type Hub struct {
 	shutdown     chan struct{}
 	shutdownOnce sync.Once
 	done         chan struct{}
-	stateMu      sync.Mutex
-	started      bool
+	started      atomic.Bool
 }
 
 // NewHub creates and initializes a new Hub instance with all necessary channels
@@ -163,8 +163,15 @@ func (h *Hub) ClientCount() int {
 }
 
 // Start launches the hub event loop in a goroutine if it is not already running.
+//
+// The started flag is set here, before the goroutine exists, not inside it: a
+// [Hub.Shutdown] issued straight after Start must see the loop as started and
+// signal it, rather than return early and leave a loop that starts afterwards to
+// run for good.
 func (h *Hub) Start() {
-	go h.run()
+	if h.started.CompareAndSwap(false, true) {
+		go h.run()
+	}
 }
 
 // IsStopped reports whether the hub event loop has exited.
@@ -177,33 +184,10 @@ func (h *Hub) IsStopped() bool {
 	}
 }
 
-func (h *Hub) markStarted() bool {
-	h.stateMu.Lock()
-	defer h.stateMu.Unlock()
-
-	if h.started {
-		return false
-	}
-
-	h.started = true
-	return true
-}
-
-func (h *Hub) hasStarted() bool {
-	h.stateMu.Lock()
-	defer h.stateMu.Unlock()
-
-	return h.started
-}
-
 // run is the hub's main event loop, handling client registration,
 // unregistration, and message broadcasting. It runs until shutdown is signalled
 // and is launched in its own goroutine by [Hub.Start].
 func (h *Hub) run() {
-	if !h.markStarted() {
-		return
-	}
-
 	defer close(h.done)
 
 	for {
@@ -235,11 +219,9 @@ func (h *Hub) addClient(client clientConn) {
 	h.clients[client] = client.inbox()
 	log().Info("client registered", "addr", client.remoteAddr(), "total_clients", len(h.clients))
 
-	h.wg.Add(1)
-	go func() {
-		defer h.wg.Done()
+	h.wg.Go(func() {
 		client.serve()
-	}()
+	})
 }
 
 // removeClient unregisters a client and closes its inbox. It is a no-op for
@@ -304,7 +286,7 @@ func (h *Hub) shutdownClients() {
 // have finished, or when ctx is done — whichever comes first. Both stages share
 // the one deadline carried by ctx.
 func (h *Hub) Shutdown(ctx context.Context) error {
-	if !h.hasStarted() {
+	if !h.started.Load() {
 		return nil
 	}
 

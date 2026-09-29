@@ -63,7 +63,7 @@ on the host side with `-p 9090:8080` instead.
 
 ## What the image contains
 
-**Build stage** — `golang:1.26.5-alpine`, compiles with `CGO_ENABLED=0 -trimpath -ldflags="-s -w"`
+**Build stage** — `golang:1.26.8-alpine`, compiles with `CGO_ENABLED=0 -trimpath -ldflags="-s -w"`
 for a static, stripped binary. `GOOS` and `GOARCH` come from buildx's `TARGETOS`/`TARGETARCH`
 arguments, defaulting to `linux/amd64`.
 
@@ -74,8 +74,9 @@ non-root user `blip` (UID 1000). Entry point is `/app/blip`. The health check ru
 The Compose service additionally runs with a read-only root filesystem, all capabilities dropped, and
 `no-new-privileges`. The server writes nothing to disk, so nothing needs a writable mount.
 
-The Go version is pinned in the Dockerfile and must be bumped together with `go.mod` and the README
-when the toolchain moves. CI reads its version from `go.mod` and needs no change.
+The Go version is pinned in the Dockerfile and must be bumped together with `go.mod`, the README and
+the other docs that name it when the toolchain moves. CI reads its version from `go.mod` and needs
+no change.
 
 ## Behind a reverse proxy
 
@@ -108,8 +109,9 @@ docker inspect --format='{{.State.Health.Status}}' blip-server
 docker exec -it blip-server /bin/sh
 ```
 
-The container writes plain-text logs to stdout with no log levels, so ship them straight to your log
-collector via the Docker logging driver.
+The container writes `log/slog` text records (`key=value`, each with a `level=`) to stderr, which
+`LOG_LEVEL` controls; the Docker logging driver captures both streams, so ship them straight to your
+log collector.
 
 ## Related
 

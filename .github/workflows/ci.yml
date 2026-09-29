@@ -80,7 +80,7 @@ jobs:
 
       - uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.12.2
+          version: v2.13.2
           args: --timeout=10m
 
   vulncheck:
@@ -97,7 +97,7 @@ jobs:
       # Pinned like every other tool in this workflow, so a govulncheck release
       # cannot change the result of a rerun of an old commit.
       - name: Run govulncheck
-        run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
 
   docker:
     name: Docker Build and Scan

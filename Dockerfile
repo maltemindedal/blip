@@ -2,7 +2,7 @@
 # Produces a minimal, non-root production image.
 
 # Stage 1: build
-FROM golang:1.26.5-alpine AS builder
+FROM golang:1.26.8-alpine AS builder
 
 WORKDIR /build
 

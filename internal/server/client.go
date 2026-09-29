@@ -30,6 +30,7 @@ type Client struct {
 	maxMessageSize int64
 	rateLimiter    rateLimiter
 	rateLimit      RateLimitConfig
+	throttled      bool // read pump only: a throttling episode has been logged
 }
 
 // NewClient creates a new Client instance with the provided WebSocket connection,
@@ -115,11 +116,19 @@ func (c *Client) handleReadError(err error) bool {
 	return true
 }
 
-// checkRateLimit reports whether the client is within its message budget.
+// checkRateLimit reports whether the client is within its message budget. Only
+// the first discard of a throttling episode is logged, so a client flooding past
+// its burst cannot make the server write a log line per frame it sends.
 func (c *Client) checkRateLimit() bool {
 	if c.rateLimiter.allow() {
+		c.throttled = false
 		return true
 	}
+
+	if c.throttled {
+		return false
+	}
+	c.throttled = true
 
 	log().Warn("rate limit exceeded; discarding message",
 		"addr", c.addr,

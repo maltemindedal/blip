@@ -3,6 +3,7 @@
 package server
 
 import (
+	"math"
 	"os"
 	"slices"
 	"strconv"
@@ -18,6 +19,10 @@ const (
 	defaultRateLimitRefill = time.Second
 	defaultAllowedOrigin   = "http://localhost:8080"
 )
+
+// maxRefillSeconds is the largest RATE_LIMIT_REFILL_INTERVAL that still fits a
+// [time.Duration] once multiplied by [time.Second].
+const maxRefillSeconds = math.MaxInt64 / int64(time.Second)
 
 // RateLimitConfig defines the parameters for per-connection message rate limiting.
 type RateLimitConfig struct {
@@ -126,11 +131,11 @@ func NewConfigFromEnv() *Config {
 		cfg.AllowedOrigins = parseOrigins(origins)
 	}
 
-	cfg.MaxMessageSize = positiveIntFromEnv("MAX_MESSAGE_SIZE", cfg.MaxMessageSize)
-	cfg.RateLimit.Burst = positiveIntFromEnv("RATE_LIMIT_BURST", cfg.RateLimit.Burst)
+	cfg.MaxMessageSize = positiveIntFromEnv("MAX_MESSAGE_SIZE", cfg.MaxMessageSize, math.MaxInt64)
+	cfg.RateLimit.Burst = positiveIntFromEnv("RATE_LIMIT_BURST", cfg.RateLimit.Burst, math.MaxInt64)
 
 	refillSeconds := positiveIntFromEnv("RATE_LIMIT_REFILL_INTERVAL",
-		int(cfg.RateLimit.RefillInterval/time.Second))
+		int64(cfg.RateLimit.RefillInterval/time.Second), maxRefillSeconds)
 	cfg.RateLimit.RefillInterval = time.Duration(refillSeconds) * time.Second
 
 	return &cfg
@@ -144,17 +149,18 @@ func parseOrigins(origins string) []string {
 	return parts
 }
 
-// positiveIntFromEnv reads name and returns it as an integer greater than zero.
-// An unset variable, a value that does not parse, and a value that is zero or
-// negative all yield fallback; the latter two are logged first.
-func positiveIntFromEnv[T int | int64](name string, fallback T) T {
+// positiveIntFromEnv reads name and returns it as an integer greater than zero
+// and no greater than limit. An unset variable, a value that does not parse, a
+// value that is zero or negative, and a value above limit or too large for T all
+// yield fallback; all but the first are logged first.
+func positiveIntFromEnv[T int | int64](name string, fallback T, limit int64) T {
 	raw := os.Getenv(name)
 	if raw == "" {
 		return fallback
 	}
 
 	parsed, err := strconv.ParseInt(raw, 10, 64)
-	if err != nil || parsed <= 0 {
+	if err != nil || parsed <= 0 || parsed > limit || int64(T(parsed)) != parsed {
 		log().Warn("invalid "+name+"; using default", "value", raw, "default", fallback)
 		return fallback
 	}

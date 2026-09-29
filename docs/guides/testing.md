@@ -101,14 +101,12 @@ coverage.
 | Helper                                            | Purpose                                                             |
 | ------------------------------------------------- | ------------------------------------------------------------------- |
 | `CreateTestServer(t, build)`                      | `httptest` server whose handler is built from its own base URL, closed when the test ends |
-| `CreateTestServerWithTimeouts(t, handler, ServerTimeouts)` | Same, with explicit read/write/idle HTTP timeouts           |
 | `WaitFor(t, timeout, what, cond)`                 | Poll a condition to a deadline — use instead of `time.Sleep`         |
 | `WaitForServer(t, url, timeout)`                  | Block until a just-started server accepts requests                   |
 | `Dial(t, wsURL, origin)`                          | Dial a `ws://` URL from a given `Origin`, closed when the test ends  |
 | `DialPair(t, wsURL, origin)`                      | The sender/receiver pair delivery tests need                         |
 | `ConnectWebSocket(url)`                           | Dial with the default dev origin; returns an error instead of failing |
 | `SendMessage(conn, content)`                      | Send `{"content": ...}`                                              |
-| `CloseWebSocket(conn)`                            | Close cleanly                                                        |
 | `MakeRequest(t, method, url)`                     | HTTP request, fully read; returns a `Response` with the body closed  |
 | `AssertStatusCode` / `AssertContentType` / `AssertBody` | Common assertions over a `Response`                            |
 
@@ -156,9 +154,10 @@ Follow the conventions already in the suite:
 
 ### Benchmarks
 
-`make bench` runs `go test -bench=. -benchmem ./...`. The benchmarks live alongside the code they
-measure, in `internal/server/*_internal_test.go`, because they exercise unexported hot paths:
-broadcast fan-out, message normalization, the rate limiter, and origin checks.
+`make bench` runs `go test -run '^$' -bench=. -benchmem ./...`; `-run '^$'` skips the tests so only
+the benchmarks execute. The benchmarks live alongside the code they measure, in
+`internal/server/*_internal_test.go`, because they exercise unexported hot paths: broadcast fan-out,
+message normalization, the rate limiter, and origin checks.
 
 `BenchmarkHubBroadcast` builds its client set with `newBenchHub`, which installs fakes through the
 hub's own registration path rather than writing the client map behind its back, so the fan-out it

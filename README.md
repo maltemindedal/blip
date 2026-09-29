@@ -14,7 +14,7 @@ real-time relay behind your own application, or as a starting point to build on.
 
 ## Quick start
 
-Requires **Go 1.26.5 or later** (`go version`) and Git. GNU Make is optional.
+Requires **Go 1.26.8 or later** (`go version`) and Git. GNU Make is optional.
 
 ```bash
 git clone https://github.com/maltemindedal/blip.git

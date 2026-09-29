@@ -18,7 +18,6 @@ endif
 BINARY_NAME=blip
 BUILD_DIR=./bin
 MAIN_PATH=./cmd/server
-GO_FILES=$(shell find . -name '*.go' -not -path './vendor/*' 2>/dev/null || dir /s /b *.go 2>nul | findstr /v "\\vendor\\")
 COVERAGE_FILE=coverage.out
 COVERAGE_HTML=coverage.html
 
@@ -203,11 +202,11 @@ ci-local: clean fmt vet lint test-coverage security-scan deps-check build
 ## install-tools: Install development tools
 install-tools:
 	@echo "Installing development tools..."
-	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
-	go install golang.org/x/vuln/cmd/govulncheck@latest
-	go install github.com/securego/gosec/v2/cmd/gosec@latest
-	go install golang.org/x/tools/cmd/goimports@latest
-	go install github.com/air-verse/air@latest
+	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2
+	go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
+	go install github.com/securego/gosec/v2/cmd/gosec@v2.29.0
+	go install golang.org/x/tools/cmd/goimports@v0.50.0
+	go install github.com/air-verse/air@v1.67.4
 	@echo "Development tools installed"
 
 ## docker-build: Build Docker image
@@ -241,7 +240,7 @@ license-check:
 ## bench: Run performance benchmarks
 bench:
 	@echo "Running benchmarks..."
-	go test -bench=. -benchmem ./...
+	go test -run '^$$' -bench=. -benchmem ./...
 
 # Check for potential race conditions
 ## race: Run tests with race detection
@@ -354,12 +353,14 @@ build-current:
 
 # Create release build
 ## release: Create optimized release build for all platforms
-	@CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build $(RELEASE_LDFLAGS) -a -installsuffix cgo -trimpath -o $(LINUX_DIR)/$(BINARY_NAME)-amd64 $(MAIN_PATH)
-	@CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build $(RELEASE_LDFLAGS) -a -installsuffix cgo -trimpath -o $(LINUX_DIR)/$(BINARY_NAME)-arm64 $(MAIN_PATH)
-	@CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build $(RELEASE_LDFLAGS) -a -installsuffix cgo -trimpath -o $(DARWIN_DIR)/$(BINARY_NAME)-amd64 $(MAIN_PATH)
-	@CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build $(RELEASE_LDFLAGS) -a -installsuffix cgo -trimpath -o $(DARWIN_DIR)/$(BINARY_NAME)-arm64 $(MAIN_PATH)
-	@CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build $(RELEASE_LDFLAGS) -a -installsuffix cgo -trimpath -o $(WINDOWS_DIR)/$(BINARY_NAME)-amd64.exe $(MAIN_PATH)
-	@CGO_ENABLED=0 GOOS=windows GOARCH=arm64 go build $(RELEASE_LDFLAGS) -a -installsuffix cgo -trimpath -o $(WINDOWS_DIR)/$(BINARY_NAME)-arm64.exe $(MAIN_PATH)
+release: clean fmt vet lint test
+	@echo Creating release builds...
+	@CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build $(RELEASE_LDFLAGS) -trimpath -o $(LINUX_DIR)/$(BINARY_NAME)-amd64 $(MAIN_PATH)
+	@CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build $(RELEASE_LDFLAGS) -trimpath -o $(LINUX_DIR)/$(BINARY_NAME)-arm64 $(MAIN_PATH)
+	@CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build $(RELEASE_LDFLAGS) -trimpath -o $(DARWIN_DIR)/$(BINARY_NAME)-amd64 $(MAIN_PATH)
+	@CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build $(RELEASE_LDFLAGS) -trimpath -o $(DARWIN_DIR)/$(BINARY_NAME)-arm64 $(MAIN_PATH)
+	@CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build $(RELEASE_LDFLAGS) -trimpath -o $(WINDOWS_DIR)/$(BINARY_NAME)-amd64.exe $(MAIN_PATH)
+	@CGO_ENABLED=0 GOOS=windows GOARCH=arm64 go build $(RELEASE_LDFLAGS) -trimpath -o $(WINDOWS_DIR)/$(BINARY_NAME)-arm64.exe $(MAIN_PATH)
 	@echo Release builds created in $(BUILD_DIR)/
 	@echo Creating checksums...
 	@cd $(LINUX_DIR) && (sha256sum * > checksums.txt 2>/dev/null || shasum -a 256 * > checksums.txt)

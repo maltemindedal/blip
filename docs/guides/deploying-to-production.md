@@ -243,9 +243,14 @@ Messages to alert on:
 | `msg`                                            | Level | Meaning                                      |
 | ------------------------------------------------ | ----- | -------------------------------------------- |
 | `blocked WebSocket connection from disallowed origin` | WARN | Misconfigured `ALLOWED_ORIGINS` or an attack |
-| `rate limit exceeded; discarding message`        | WARN  | A client is flooding                          |
+| `rate limit exceeded; discarding message`        | WARN  | A client is flooding (once per episode)       |
 | `dropping client with a full send buffer`        | WARN  | A slow consumer was dropped                   |
 | `hub shutdown timed out...`                      | ERROR | Shutdown did not drain within its budget      |
+
+`rate limit exceeded; discarding message` is logged when a client's first message is discarded after
+one was last allowed, so it marks the start of throttling, not each dropped message: a client that
+keeps flooding produces at most one line per message the limiter lets through, not one per frame.
+Do not count these lines as a measure of dropped messages.
 
 `client registered` and `client unregistered` carry `total_clients`, which is the closest thing to a
 connection-count gauge. Do not run production at `LOG_LEVEL=debug`: it logs every inbound message and

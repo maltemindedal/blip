@@ -165,6 +165,61 @@ func TestHubShutdownBeforeStartIsNoOp(t *testing.T) {
 	}
 }
 
+// TestHubShutdownRightAfterStartStopsTheHub verifies that Shutdown called
+// straight after Start stops the event loop, instead of returning nil because
+// the loop's goroutine had not been scheduled yet and then leaving it running
+// for good. The hub is shut down at once, with no barrier in between, because
+// that is the case being pinned.
+func TestHubShutdownRightAfterStartStopsTheHub(t *testing.T) {
+	t.Parallel()
+
+	const rounds = 200
+
+	for range rounds {
+		hub := server.NewHub(nil)
+		hub.Start()
+
+		if err := shutdownHub(t, hub); err != nil {
+			t.Fatalf(shutdownErrorMsg, err)
+		}
+
+		if !hub.IsStopped() {
+			t.Fatal("Hub kept running after Shutdown returned straight after Start")
+		}
+	}
+}
+
+// TestHubStartTwiceRunsOneLoop verifies that Start is idempotent: repeated and
+// concurrent calls run a single event loop, which one Shutdown then stops. A
+// second loop would close the hub's done channel twice and panic.
+func TestHubStartTwiceRunsOneLoop(t *testing.T) {
+	t.Parallel()
+
+	hub := server.NewHub(nil)
+
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Go(hub.Start)
+	}
+	wg.Wait()
+	hub.Start()
+
+	if got := hub.ClientCount(); got != 0 {
+		t.Fatalf("Expected no clients on a fresh hub, got %d", got)
+	}
+
+	if err := shutdownHub(t, hub); err != nil {
+		t.Fatalf(shutdownErrorMsg, err)
+	}
+	if !hub.IsStopped() {
+		t.Error("Hub kept running after Shutdown")
+	}
+
+	if err := shutdownHub(t, hub); err != nil {
+		t.Errorf("Expected a second Shutdown to succeed, got: %v", err)
+	}
+}
+
 // TestHubShutdownIsIdempotent verifies that concurrent and repeated Shutdown
 // calls are safe and all report success.
 func TestHubShutdownIsIdempotent(t *testing.T) {
