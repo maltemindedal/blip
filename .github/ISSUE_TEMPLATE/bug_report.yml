@@ -1,0 +1,54 @@
+name: Bug report
+description: Report a bug in Blip.
+labels: ["bug"]
+body:
+  - type: input
+    id: commit
+    attributes:
+      label: Commit
+      description: >-
+        The commit you are on (`git rev-parse --short HEAD`), or the `version` and `commit`
+        from the `starting Blip server` log line.
+    validations:
+      required: true
+  - type: textarea
+    id: how-run
+    attributes:
+      label: How you ran it
+      description: >-
+        The command (`./bin/blip`, `make run`, `docker compose up`, ...) and any environment
+        variables you set.
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: OS and Go version
+      description: Your OS, and the output of `go version`.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Exact steps, ideally with a minimal client script.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Server log lines
+      description: Relevant lines only. `LOG_LEVEL=debug` traces individual messages.
+      render: text
