@@ -113,7 +113,7 @@ reproduce them.
 ## Contributing
 
 Bug reports, features, and pull requests are welcome — see
-[docs/contributing.md](docs/contributing.md).
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 

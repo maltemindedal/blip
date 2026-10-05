@@ -290,4 +290,4 @@ threading a connection ID through the pumps.
 - [API reference](../reference/api.md) — the externally visible contract
 - [Configuration reference](../reference/configuration.md) — every tunable and every constant
 - [Testing](../guides/testing.md) — how the concurrency guarantees are exercised
-- [Contributing](../contributing.md) — working in this codebase
+- [Contributing](../../CONTRIBUTING.md) — working in this codebase

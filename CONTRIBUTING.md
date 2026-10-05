@@ -88,13 +88,13 @@ Linters enabled in `.golangci.yml`, grouped as the file groups them:
 
 Formatting is enforced separately by the `formatters` block (`gofmt`, `goimports`).
 
-The repository also carries [`AGENTS.md`](../AGENTS.md), guidance for AI coding assistants: prefer
+The repository also carries [`AGENTS.md`](AGENTS.md), guidance for AI coding assistants: prefer
 the minimal change, do not refactor adjacent code, match the surrounding style.
 
 ## Tests
 
 New behavior needs tests; bug fixes need a test that fails before the fix. See
-[Testing](guides/testing.md) for the layout, the helpers, and the coverage targets.
+[Testing](docs/guides/testing.md) for the layout, the helpers, and the coverage targets.
 
 ## Branches and commits
 
@@ -129,8 +129,9 @@ Every job fails the run on its own, so there is no separate gate job. Runs are g
 
 The Go version comes from `go.mod` via `go-version-file`, so the workflow never needs its own pin.
 `govulncheck` reports vulnerabilities in the Go toolchain itself, so a stdlib advisory fails CI until
-the toolchain is raised — and that means `go.mod`, `Dockerfile`, `README.md`, and every page under
-`docs/` that names the version, together (`git grep` the old version to find them).
+the toolchain is raised — and that means `go.mod`, `Dockerfile`, `README.md`, `CONTRIBUTING.md`,
+and every page under `docs/` that names the version, together (`git grep` the old version to find
+them).
 
 ## Reporting issues
 
@@ -141,11 +142,11 @@ the toolchain is raised — and that means `go.mod`, `Dockerfile`, `README.md`, 
 considered.
 
 **Security vulnerabilities** — do not open a public issue. See
-[Security hardening](guides/security-hardening.md#reporting-a-vulnerability).
+[Security hardening](docs/guides/security-hardening.md#reporting-a-vulnerability).
 
 ## Related
 
-- [Testing](guides/testing.md) — running and writing tests
-- [Architecture overview](architecture/overview.md) — how the server is put together
-- [Make targets reference](reference/make-targets.md) — every automation entry point
-- [Building and releasing](guides/building-and-releasing.md) — cutting a build
+- [Testing](docs/guides/testing.md) — running and writing tests
+- [Architecture overview](docs/architecture/overview.md) — how the server is put together
+- [Make targets reference](docs/reference/make-targets.md) — every automation entry point
+- [Building and releasing](docs/guides/building-and-releasing.md) — cutting a build

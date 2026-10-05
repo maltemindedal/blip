@@ -36,7 +36,7 @@ Everything written about Blip, grouped by what you are trying to do. Start with
 
 ## Contributing
 
-[Contributing](contributing.md) — development setup, code standards, the pre-push checklist, and
+[Contributing](../CONTRIBUTING.md) — development setup, code standards, the pre-push checklist, and
 what CI enforces.
 
 ## Elsewhere in the repository
