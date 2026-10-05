@@ -83,4 +83,4 @@ each at a pinned version (golangci-lint and govulncheck at the versions CI uses)
 
 - [Building and releasing](../guides/building-and-releasing.md) — when to use which target
 - [Testing](../guides/testing.md) — how the suite is organized
-- [Contributing](../contributing.md) — the checks CI runs
+- [Contributing](../../CONTRIBUTING.md) — the checks CI runs

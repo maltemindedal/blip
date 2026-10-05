@@ -176,10 +176,10 @@ The `test` job runs `go test -race -shuffle=on -coverprofile=coverage.out -cover
 on Ubuntu with the toolchain from `go.mod`. `-shuffle=on` randomizes test order, so a suite that
 depends on ordering fails in CI even when it passes locally. A separate `bench` job runs every
 benchmark once (`-benchtime=10x`) to keep them compiling. See
-[Contributing](../contributing.md#continuous-integration).
+[Contributing](../../CONTRIBUTING.md#continuous-integration).
 
 ## Related
 
-- [Contributing](../contributing.md) — the full pre-push check list
+- [Contributing](../../CONTRIBUTING.md) — the full pre-push check list
 - [Make targets reference](../reference/make-targets.md) — every test target
 - [Architecture overview](../architecture/overview.md) — what the concurrency tests are protecting
