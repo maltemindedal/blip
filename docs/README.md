@@ -39,6 +39,8 @@ Everything written about Blip, grouped by what you are trying to do. Start with
 [Contributing](../CONTRIBUTING.md) — development setup, code standards, the pre-push checklist, and
 what CI enforces.
 
+[Code of conduct](../CODE_OF_CONDUCT.md) — the Contributor Covenant, and how to report a violation.
+
 ## Elsewhere in the repository
 
 - [`.env.example`](../.env.example) — annotated configuration template

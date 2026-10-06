@@ -3,6 +3,8 @@
 Thanks for wanting to help. This page covers development setup, the checks your change must pass,
 and how a pull request gets reviewed.
 
+Everyone taking part in this project is expected to follow the [code of conduct](CODE_OF_CONDUCT.md).
+
 ## Development setup
 
 Prerequisites: Go 1.26.8 or later, Git, and optionally GNU Make.
