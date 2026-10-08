@@ -90,6 +90,9 @@ func TestWriteFrameCoalescesTheQueue(t *testing.T) {
 // behind it is the first message alone, written without waiting for more: the
 // write pump must get back to its select, where a ping or the hub's shutdown
 // can reach it.
+//
+// It does not cover a queue that fills while the frame is being written;
+// TestWriteFrameLeavesLaterMessagesForTheNextFrame does.
 func TestWriteFrameDoesNotWaitOnAnEmptyQueue(t *testing.T) {
 	t.Parallel()
 
@@ -132,6 +135,10 @@ func (f *failingWriter) Write(p []byte) (int, error) {
 // TestWriteFrameStopsAtTheFirstWriteError pins that whichever write fails — the
 // first message, a separator, or a queued message — its error is returned and
 // nothing more is written, which is what makes the write pump stop.
+//
+// It covers writeFrame alone. That writeMessages then releases the writer and
+// stops the pump is not pinned by any unit test, because it needs a real
+// connection.
 func TestWriteFrameStopsAtTheFirstWriteError(t *testing.T) {
 	t.Parallel()
 
@@ -150,5 +157,53 @@ func TestWriteFrameStopsAtTheFirstWriteError(t *testing.T) {
 		if w.calls != ok+1 {
 			t.Errorf("failing write %d: writeFrame made %d writes, want %d", ok+1, w.calls, ok+1)
 		}
+	}
+}
+
+// producingWriter accepts every write and, during the second, queues one more
+// message: a producer delivering after writeFrame has read the queue's depth,
+// which it does once the first message is written.
+type producingWriter struct {
+	bytes.Buffer
+
+	queue  chan<- []byte
+	late   []byte
+	writes int
+}
+
+func (w *producingWriter) Write(p []byte) (int, error) {
+	w.writes++
+	if w.writes == 2 {
+		w.queue <- w.late
+	}
+
+	return w.Buffer.Write(p)
+}
+
+// TestWriteFrameLeavesLaterMessagesForTheNextFrame pins that writeFrame reads
+// the queue's depth once: a message delivered while the frame is being written
+// stays queued for the next frame instead of joining this one. Re-reading the
+// depth on every pass would let a producer that keeps pace hold the write pump
+// inside one frame, away from its select, where pings and the hub's shutdown
+// reach it.
+//
+// The producer is the writer itself, queueing during the first separator, so the
+// test needs no second goroutine. It does not run a real concurrent producer.
+func TestWriteFrameLeavesLaterMessagesForTheNextFrame(t *testing.T) {
+	t.Parallel()
+
+	queued := make(chan []byte, 4)
+	queued <- []byte(`{"content":"b"}`)
+	w := &producingWriter{queue: queued, late: []byte(`{"content":"late"}`)}
+
+	if err := writeFrame(w, []byte(`{"content":"a"}`), queued); err != nil {
+		t.Fatalf("writeFrame returned %v", err)
+	}
+
+	if want := "{\"content\":\"a\"}\n{\"content\":\"b\"}"; w.String() != want {
+		t.Errorf("frame body = %q, want %q", w.String(), want)
+	}
+	if n := len(queued); n != 1 {
+		t.Errorf("writeFrame left %d messages queued, want the 1 that arrived mid-frame", n)
 	}
 }

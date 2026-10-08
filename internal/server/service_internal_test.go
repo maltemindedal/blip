@@ -188,6 +188,10 @@ func TestRunDrainsTheHubWhenTheListenerFails(t *testing.T) {
 // lifecycle rather than a copy of it: a listener that fails — here, one already
 // closed — drains the hub Serve started instead of leaving it running, and the
 // accept error stays reachable through the error Serve returns.
+//
+// It covers a listener that fails at once. It does not cover the cancellation
+// path, which TestServeClosesItsListenerBeforeReturning and the integration
+// suite run, nor a drain that overruns its budget.
 func TestServeDrainsTheHubWhenTheListenerFails(t *testing.T) {
 	t.Parallel()
 

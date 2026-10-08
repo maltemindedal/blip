@@ -298,13 +298,13 @@ var newline = []byte{'\n'}
 // message already queued, separated by newlines. It returns the first write
 // error.
 //
-// The queue's depth is read once, so messages that arrive while the frame is
-// being written go into the next one, and the frame never waits on an empty
-// queue. Every receive below gets a message that was buffered when the depth was
-// read: the write pump is the queue's only receiver, and closing a channel keeps
-// what it buffered. So a hub that closes the inbox mid-frame still has the
-// messages queued before it did delivered; the pump sees the close on its next
-// receive.
+// The queue's depth is read once, after first is written, so messages that
+// arrive after that go into the next frame, and the frame never waits on an
+// empty queue. Every receive below gets a message that was buffered when the
+// depth was read: the write pump is the queue's only receiver, and closing a
+// channel keeps what it buffered. So a hub that closes the inbox mid-frame still
+// has the messages queued before it did delivered; the pump sees the close on
+// its next receive.
 func writeFrame(w io.Writer, first []byte, queued <-chan []byte) error {
 	if _, err := w.Write(first); err != nil {
 		return err
