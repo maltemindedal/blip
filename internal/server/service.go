@@ -127,12 +127,21 @@ func (s *Service) run(ctx context.Context, addr string, serve func() error) erro
 		// when the drain ran, and Shutdown cannot close a listener it has not
 		// seen. Once Shutdown has run, both return ErrServerClosed as soon as
 		// they start, closing the listener on the way out, so this wait is
-		// short; it is what keeps the listener from outliving the call. What
-		// the goroutine reports is moot after a shutdown, so it is dropped.
-		<-serverErrors
+		// short; it is what keeps the listener from outliving the call.
+		//
+		// The goroutine reports nil for that close. Anything else means the
+		// listener failed on its own before the shutdown reached it, and a
+		// cancellation that won the select does not make that failure moot.
+		serveErr := <-serverErrors
 
 		if shutdownErr != nil {
-			return fmt.Errorf("graceful shutdown: %w", shutdownErr)
+			shutdownErr = fmt.Errorf("graceful shutdown: %w", shutdownErr)
+		}
+		if serveErr != nil {
+			return errors.Join(fmt.Errorf("http server: %w", serveErr), shutdownErr)
+		}
+		if shutdownErr != nil {
+			return shutdownErr
 		}
 
 		log().Info("server stopped gracefully")

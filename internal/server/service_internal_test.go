@@ -338,3 +338,45 @@ func TestServeClosesOpenConnectionsWhenTheListenerFails(t *testing.T) {
 		t.Errorf("A connection accepted before the failure got status %d after Serve returned", status)
 	}
 }
+
+// cancellingListener fails every Accept with err after calling cancel: a
+// listener that breaks at the moment a shutdown is requested.
+type cancellingListener struct {
+	net.Listener
+	cancel context.CancelFunc
+	err    error
+}
+
+func (l *cancellingListener) Accept() (net.Conn, error) {
+	l.cancel()
+	return nil, l.err
+}
+
+// TestServeReportsAListenerFailureThatRacesCancellation pins that a listener
+// failure is reported even when a cancellation arrives with it. The listener
+// cancels the context inside Accept and then fails, so run's select wakes on
+// the cancellation and takes the shutdown path, and the failure reaches run
+// only through the serving goroutine it waits for after the drain.
+//
+// It does not cover a failure that comes after the shutdown has reached the
+// http.Server: Serve then reports the server's own close, which run rightly
+// treats as no failure.
+func TestServeReportsAListenerFailureThatRacesCancellation(t *testing.T) {
+	t.Parallel()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Failed to listen: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+
+	errBroken := errors.New("listener broken")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	serveErr := New(nil).Serve(ctx, &cancellingListener{Listener: ln, cancel: cancel, err: errBroken})
+
+	if !errors.Is(serveErr, errBroken) {
+		t.Errorf("Serve returned %v, want the listener's error", serveErr)
+	}
+}
