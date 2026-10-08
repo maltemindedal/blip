@@ -73,7 +73,7 @@ func webSocketHandlerForHub(h *Hub) http.HandlerFunc {
 			return
 		}
 
-		client := newClient(conn, h, r.RemoteAddr, cfg.MaxMessageSize, cfg.RateLimit)
+		client := newClient(conn, h, r.RemoteAddr, cfg)
 
 		// A rejected client was never added to the hub, so closing it is the
 		// handler's job.

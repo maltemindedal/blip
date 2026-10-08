@@ -37,19 +37,20 @@ type wsClient struct {
 // hub reference, and client address. The client's send channel is buffered
 // to handle message queuing.
 //
-// maxMessageSize and rateLimit are the limits the connection runs under; the
-// caller passes the ones the hub resolved. Nothing here touches conn or hub, so
-// a test can build a client without either and still get the limiter and the
-// limits the read pump would, from the same arguments.
-func newClient(conn *websocket.Conn, hub *Hub, addr string, maxMessageSize int64, rateLimit RateLimitConfig) *wsClient {
+// cfg is the resolved configuration the connection runs under, which in
+// production is hub's own; the size limit and the rate limit both come from it,
+// so the two cannot be taken from different places. Nothing here touches conn
+// or hub, so a test can build a client without either and still get the
+// limiter and the limits the read pump would.
+func newClient(conn *websocket.Conn, hub *Hub, addr string, cfg *resolvedConfig) *wsClient {
 	return &wsClient{
 		conn:           conn,
 		send:           make(chan []byte, sendBufferSz),
 		hub:            hub,
 		addr:           addr,
-		maxMessageSize: maxMessageSize,
-		rateLimiter:    newRateLimiter(rateLimit.Burst, rateLimit.RefillInterval),
-		rateLimit:      rateLimit,
+		maxMessageSize: cfg.MaxMessageSize,
+		rateLimiter:    newRateLimiter(cfg.RateLimit.Burst, cfg.RateLimit.RefillInterval),
+		rateLimit:      cfg.RateLimit,
 	}
 }
 
