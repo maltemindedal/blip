@@ -6,7 +6,7 @@ import "time"
 
 // rateLimiter is a token bucket sized for a single connection.
 //
-// It is deliberately lock-free: each limiter is embedded by value in a Client
+// It is deliberately lock-free: each limiter is embedded by value in a client
 // and only touched by that client's read pump, so the bucket needs no
 // synchronization. Do not share a limiter across goroutines.
 type rateLimiter struct {
@@ -19,7 +19,7 @@ type rateLimiter struct {
 // newRateLimiter builds a full bucket of capacity tokens that refills over
 // interval, starting from the current instant. Capacity and interval must be
 // positive: [resolveConfig] substitutes a default for anything else before a
-// hub — and therefore a Client — ever sees it.
+// hub — and therefore a client — ever sees it.
 func newRateLimiter(capacity int, interval time.Duration) rateLimiter {
 	return newRateLimiterAt(capacity, interval, time.Now())
 }
@@ -48,7 +48,7 @@ func newRateLimiterAt(capacity int, interval time.Duration, now time.Time) rateL
 // throttle by supplying an instant — there is none to supply.
 //
 // The zero value permits everything. A limiter only throttles once
-// [newRateLimiter] has given it a capacity, so a Client assembled without one
+// [newRateLimiter] has given it a capacity, so a client assembled without one
 // — as tests do — is unlimited rather than silently blocked.
 func (rl *rateLimiter) allow() bool {
 	return rl.allowAt(time.Now())
@@ -66,9 +66,9 @@ func (rl *rateLimiter) allow() bool {
 // throttle the configured one.
 //
 // The instant is a parameter rather than a field on the struct: a limiter is
-// embedded by value in every Client and this is a per-message path, so a
+// embedded by value in every client and this is a per-message path, so a
 // func-valued field would cost an indirect call per message and grow every
-// Client.
+// client.
 func (rl *rateLimiter) allowAt(now time.Time) bool {
 	if rl.capacity <= 0 {
 		return true

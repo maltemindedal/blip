@@ -540,7 +540,7 @@ func testMessageAfterRefill(t *testing.T, sender, receiver *websocket.Conn, refi
 	t.Helper()
 
 	// Not a synchronization sleep: reaching the limiter through a real socket
-	// means going through NewClient, which builds a limiter on the real clock,
+	// means going through newClient, which builds a limiter on the real clock,
 	// so wall-clock time is the only clock this test can advance.
 	time.Sleep(refillInterval + 100*time.Millisecond)
 

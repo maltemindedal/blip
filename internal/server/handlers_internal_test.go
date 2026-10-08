@@ -46,7 +46,7 @@ func TestHealthHandlerUnit(t *testing.T) {
 
 			rr := httptest.NewRecorder()
 
-			HealthHandler(rr, req)
+			healthHandler(rr, req)
 
 			if status := rr.Code; status != tt.expectedStatus {
 				t.Errorf("handler returned wrong status code: got %v want %v",
@@ -270,7 +270,7 @@ func routesAllowing(t *testing.T, origin string) *http.ServeMux {
 	cfg := NewConfig()
 	cfg.AllowedOrigins = []string{origin}
 
-	return SetupRoutesWithHub(startTestHub(t, cfg))
+	return setupRoutes(startTestHub(t, cfg))
 }
 
 // upgradeStatus drives a WebSocket handshake from origin through routes and

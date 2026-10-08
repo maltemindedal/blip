@@ -33,7 +33,7 @@ type Service struct {
 // connection paths (origin checks, message size limits, rate limiting) read this
 // service's settings rather than the process's.
 func New(cfg *Config) *Service {
-	hub := NewHub(cfg)
+	hub := newHub(cfg)
 
 	return &Service{
 		hub: hub,
@@ -42,7 +42,7 @@ func New(cfg *Config) *Service {
 			// the default and rewrites a bare port into ":port", which is the
 			// form http.Server.Addr requires.
 			Addr:              hub.cfg.Port,
-			Handler:           SetupRoutesWithHub(hub),
+			Handler:           setupRoutes(hub),
 			ReadTimeout:       15 * time.Second,
 			ReadHeaderTimeout: 5 * time.Second,
 			WriteTimeout:      15 * time.Second,
@@ -91,7 +91,7 @@ func (s *Service) Serve(ctx context.Context, ln net.Listener) error {
 // serve on serve's goroutine, and drain on cancellation or a listener failure.
 // addr is only logged.
 func (s *Service) run(ctx context.Context, addr string, serve func() error) error {
-	s.hub.Start()
+	s.hub.start()
 	log().Info("hub started and ready to manage WebSocket connections")
 
 	serverErrors := make(chan error, 1)
@@ -111,7 +111,7 @@ func (s *Service) run(ctx context.Context, addr string, serve func() error) erro
 		if err != nil {
 			// The hub is already running, so a listener failure must drain it
 			// rather than leave its goroutines behind.
-			hubErr := withStageDeadline(context.Background(), s.hub.Shutdown)
+			hubErr := withStageDeadline(context.Background(), s.hub.shutdown)
 			return errors.Join(fmt.Errorf("http server: %w", err), hubErr)
 		}
 		return nil
@@ -140,7 +140,7 @@ func (s *Service) shutdown() error {
 	defer cancel()
 
 	httpErr := withStageDeadline(ctx, s.stopAccepting)
-	hubErr := withStageDeadline(ctx, s.hub.Shutdown)
+	hubErr := withStageDeadline(ctx, s.hub.shutdown)
 
 	return errors.Join(httpErr, hubErr)
 }

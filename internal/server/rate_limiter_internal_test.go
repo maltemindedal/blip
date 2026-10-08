@@ -225,12 +225,12 @@ func allowedAt(rl *rateLimiter, now time.Time, limit int) int {
 	return limit
 }
 
-// TestZeroValueRateLimiterAllows pins the zero value as unlimited. A Client
-// assembled without NewClient must not be silently throttled to nothing.
+// TestZeroValueRateLimiterAllows pins the zero value as unlimited. A client
+// assembled without newClient must not be silently throttled to nothing.
 func TestZeroValueRateLimiterAllows(t *testing.T) {
 	t.Parallel()
 
-	c := &Client{}
+	c := &client{}
 	for i := range 100 {
 		if !c.rateLimiter.allow() {
 			t.Fatalf("zero-value limiter denied message %d", i)

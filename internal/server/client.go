@@ -19,10 +19,10 @@ const (
 	sendBufferSz = 256
 )
 
-// Client represents a WebSocket client connection in the chat system.
+// client represents a WebSocket client connection in the chat system.
 // It manages the connection state, message sending channel, hub reference,
 // and client address information.
-type Client struct {
+type client struct {
 	conn           *websocket.Conn
 	send           chan []byte
 	hub            *Hub
@@ -33,7 +33,7 @@ type Client struct {
 	throttled      bool // read pump only: a throttling episode has been logged
 }
 
-// NewClient creates a new Client instance with the provided WebSocket connection,
+// newClient creates a new client with the provided WebSocket connection,
 // hub reference, and client address. The client's send channel is buffered
 // to handle message queuing.
 //
@@ -41,8 +41,8 @@ type Client struct {
 // caller passes the ones the hub resolved. Nothing here touches conn or hub, so
 // a test can build a client without either and still get the limiter and the
 // limits the read pump would, from the same arguments.
-func NewClient(conn *websocket.Conn, hub *Hub, addr string, maxMessageSize int64, rateLimit RateLimitConfig) *Client {
-	return &Client{
+func newClient(conn *websocket.Conn, hub *Hub, addr string, maxMessageSize int64, rateLimit RateLimitConfig) *client {
+	return &client{
 		conn:           conn,
 		send:           make(chan []byte, sendBufferSz),
 		hub:            hub,
@@ -55,18 +55,18 @@ func NewClient(conn *websocket.Conn, hub *Hub, addr string, maxMessageSize int64
 
 // inbox is the channel the hub delivers into, and closes when it drops this
 // client. It satisfies [clientConn].
-func (c *Client) inbox() chan<- []byte { return c.send }
+func (c *client) inbox() chan<- []byte { return c.send }
 
 // remoteAddr is the address the hub names this client by in its log records.
 // It satisfies [clientConn].
-func (c *Client) remoteAddr() string { return c.addr }
+func (c *client) remoteAddr() string { return c.addr }
 
 // serve runs the connection's two pumps and returns once both have exited. It
 // satisfies [clientConn], so the hub launches one goroutine per client and
 // stays out of how many the connection actually needs — gorilla/websocket
 // permits one concurrent reader and one concurrent writer, which is why there
 // are two.
-func (c *Client) serve() {
+func (c *client) serve() {
 	writeDone := make(chan struct{})
 	go func() {
 		defer close(writeDone)
@@ -80,7 +80,7 @@ func (c *Client) serve() {
 // setupReadConnection configures the message size limit, read deadlines, and the
 // pong handler for the WebSocket connection. It runs on the read pump before the
 // first read, which is the only goroutine that reads.
-func (c *Client) setupReadConnection() {
+func (c *client) setupReadConnection() {
 	c.conn.SetReadLimit(c.maxMessageSize)
 
 	if err := c.conn.SetReadDeadline(time.Now().Add(pongWait)); err != nil {
@@ -94,7 +94,7 @@ func (c *Client) setupReadConnection() {
 
 // handleReadError logs the error at an appropriate level and always reports
 // that the read loop should stop, since every read error is terminal.
-func (c *Client) handleReadError(err error) bool {
+func (c *client) handleReadError(err error) bool {
 	if err == nil {
 		return false
 	}
@@ -121,7 +121,7 @@ func (c *Client) handleReadError(err error) bool {
 // checkRateLimit reports whether the client is within its message budget. Only
 // the first discard of a throttling episode is logged, so a client flooding past
 // its burst cannot make the server write a log line per frame it sends.
-func (c *Client) checkRateLimit() bool {
+func (c *client) checkRateLimit() bool {
 	if c.rateLimiter.allow() {
 		c.throttled = false
 		return true
@@ -140,7 +140,7 @@ func (c *Client) checkRateLimit() bool {
 }
 
 // processMessage normalizes a raw frame and hands it to the hub for broadcast.
-func (c *Client) processMessage(rawMessage []byte) bool {
+func (c *client) processMessage(rawMessage []byte) bool {
 	payload, err := normalizeMessage(rawMessage)
 	if err != nil {
 		log().Warn("invalid message", "addr", c.addr, "error", err)
@@ -151,7 +151,7 @@ func (c *Client) processMessage(rawMessage []byte) bool {
 		log().Debug("received message", "addr", c.addr, "payload", string(payload))
 	}
 
-	if !c.hub.Publish(BroadcastMessage{Sender: c, Payload: payload}) {
+	if !c.hub.publish(broadcastMessage{Sender: c, Payload: payload}) {
 		log().Debug("skipping broadcast; hub is shutting down", "addr", c.addr)
 		return false
 	}
@@ -160,14 +160,14 @@ func (c *Client) processMessage(rawMessage []byte) bool {
 }
 
 // cleanupReadPump handles cleanup tasks when readPump exits.
-func (c *Client) cleanupReadPump() {
-	c.hub.Unregister(c)
+func (c *client) cleanupReadPump() {
+	c.hub.unregister(c)
 	c.closeConnection()
 }
 
 // handleReadMessage processes a single message read from the WebSocket and
 // reports whether the read loop should stop.
-func (c *Client) handleReadMessage() bool {
+func (c *client) handleReadMessage() bool {
 	_, rawMessage, err := c.conn.ReadMessage()
 	if err != nil {
 		return c.handleReadError(err)
@@ -180,7 +180,7 @@ func (c *Client) handleReadMessage() bool {
 	return false
 }
 
-func (c *Client) readPump() {
+func (c *client) readPump() {
 	defer c.cleanupReadPump()
 
 	c.setupReadConnection()
@@ -194,7 +194,7 @@ func (c *Client) readPump() {
 // a close frame once the hub closes the inbox. It stops at the first write that
 // fails, or as soon as the hub begins shutting down, and closes the connection
 // either way.
-func (c *Client) writePump() {
+func (c *client) writePump() {
 	ticker := time.NewTicker(pingPeriod)
 	defer func() {
 		ticker.Stop()
@@ -227,7 +227,7 @@ func (c *Client) writePump() {
 }
 
 // closeConnection safely closes the WebSocket connection with proper error handling.
-func (c *Client) closeConnection() {
+func (c *client) closeConnection() {
 	if err := c.conn.Close(); err != nil && !isExpectedCloseError(err) {
 		log().Debug("error closing connection", "addr", c.addr, "error", err)
 	}
@@ -235,7 +235,7 @@ func (c *Client) closeConnection() {
 
 // extendWriteDeadline gives the next write writeWait to complete, and reports
 // whether the deadline could be set.
-func (c *Client) extendWriteDeadline() bool {
+func (c *client) extendWriteDeadline() bool {
 	if err := c.conn.SetWriteDeadline(time.Now().Add(writeWait)); err != nil {
 		log().Debug("error setting write deadline", "addr", c.addr, "error", err)
 		return false
@@ -246,7 +246,7 @@ func (c *Client) extendWriteDeadline() bool {
 
 // writeControl sends a close or ping frame with no payload, and reports whether
 // it was written. name identifies the frame in the debug log.
-func (c *Client) writeControl(messageType int, name string) bool {
+func (c *client) writeControl(messageType int, name string) bool {
 	if !c.extendWriteDeadline() {
 		return false
 	}
@@ -263,7 +263,7 @@ func (c *Client) writeControl(messageType int, name string) bool {
 
 // writeMessages sends first, and every message already queued behind it, as one
 // text frame, and reports whether the frame was written.
-func (c *Client) writeMessages(first []byte) bool {
+func (c *client) writeMessages(first []byte) bool {
 	if !c.extendWriteDeadline() {
 		return false
 	}

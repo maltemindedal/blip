@@ -14,7 +14,7 @@ import (
 //go:embed testpage.html
 var testPageHTML []byte
 
-// HealthResponse is the exact body served by [HealthHandler]. It is exported so
+// HealthResponse is the exact body served by [healthHandler]. It is exported so
 // tests assert against the served text rather than a copy of it.
 const HealthResponse = "Blip server is running!"
 
@@ -47,7 +47,7 @@ func newUpgrader(origins originPolicy) websocket.Upgrader {
 
 // webSocketHandlerForHub returns the handler for WebSocket upgrade requests
 // against h. It validates that the request uses the GET method, upgrades the
-// HTTP connection to WebSocket, creates a new Client instance, and registers it
+// HTTP connection to WebSocket, creates a new client, and registers it
 // with the hub, which starts the client's read/write pumps.
 //
 // Every connection runs under h's resolved settings: the upgrader checks h's
@@ -73,11 +73,11 @@ func webSocketHandlerForHub(h *Hub) http.HandlerFunc {
 			return
 		}
 
-		client := NewClient(conn, h, r.RemoteAddr, cfg.MaxMessageSize, cfg.RateLimit)
+		client := newClient(conn, h, r.RemoteAddr, cfg.MaxMessageSize, cfg.RateLimit)
 
 		// A rejected client was never added to the hub, so closing it is the
 		// handler's job.
-		if !h.Register(r.Context(), client) {
+		if !h.register(r.Context(), client) {
 			client.closeConnection()
 		}
 	}
@@ -100,15 +100,15 @@ func writeStatic(w http.ResponseWriter, r *http.Request, contentType, contentLen
 	}
 }
 
-// HealthHandler provides a simple health check endpoint that returns server status.
+// healthHandler provides a simple health check endpoint that returns server status.
 // It responds with a plain text message indicating the server is running.
-func HealthHandler(w http.ResponseWriter, r *http.Request) {
+func healthHandler(w http.ResponseWriter, r *http.Request) {
 	writeStatic(w, r, "text/plain", healthLength, healthResponse)
 }
 
-// TestPageHandler serves an HTML page for exercising the WebSocket endpoint.
+// testPageHandler serves an HTML page for exercising the WebSocket endpoint.
 // It provides a simple web interface to connect to the WebSocket endpoint,
 // send messages, and view real-time chat communication.
-func TestPageHandler(w http.ResponseWriter, r *http.Request) {
+func testPageHandler(w http.ResponseWriter, r *http.Request) {
 	writeStatic(w, r, "text/html; charset=utf-8", testPageLength, testPageHTML)
 }

@@ -44,7 +44,7 @@ package by construction — one names an unexported type, the other reads the pa
 
 That view is also what makes the hub's delivery rules testable at all. `hub_internal_test.go` defines
 a `fakeClient` — an inbox and an address, no socket underneath — and registers it through the real
-`Hub.Register`, so the fan-out, sender exclusion, the backpressure drop, and no-op unregistration are
+`Hub.register`, so the fan-out, sender exclusion, the backpressure drop, and no-op unregistration are
 pinned against the running event loop rather than a copy of it. The backpressure test gives its
 victim a one-slot inbox and publishes twice; over a real connection, filling 256 slots faster than a
 consumer drains them is not something a test can arrange. Assertions read an inbox with a
@@ -144,7 +144,7 @@ Follow the conventions already in the suite:
   get wrong, and an `allowAt(now)` beside it takes the instant for the tests. The refill rules are
   pinned by unit tests that drive `allowAt` from a fixed instant; the one surviving sleep, in
   `TestWebSocketRateLimiting`, is there because reaching the limiter through a real socket goes
-  through `NewClient` and gets the real clock. A clock a caller can pass is a limit a caller can
+  through `newClient` and gets the real clock. A clock a caller can pass is a limit a caller can
   loosen, so keep production off a seam like that — and since Go has no visibility level that says
   "tests only", assert it: `TestClockSeamIsTestOnly` parses the package's non-test files and fails if
   anything but the wrapper names the seam. Say in the test what such a check does *not* cover; that

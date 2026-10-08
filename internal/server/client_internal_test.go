@@ -21,10 +21,10 @@ func TestRateLimitWarnsOncePerEpisode(t *testing.T) {
 	t.Cleanup(func() { SetLogger(slog.New(slog.DiscardHandler)) })
 
 	// checkRateLimit touches neither the connection nor the hub, so the client
-	// can be built without them — through NewClient, so its limiter and the
+	// can be built without them — through newClient, so its limiter and the
 	// limits it logs come from one argument, as they do in production.
 	const burst = 2
-	c := NewClient(nil, nil, "203.0.113.7:4242", defaultMaxMessageSize,
+	c := newClient(nil, nil, "203.0.113.7:4242", defaultMaxMessageSize,
 		RateLimitConfig{Burst: burst, RefillInterval: time.Hour})
 	warnings := func() int { return strings.Count(logs.String(), "rate limit exceeded; discarding message") }
 

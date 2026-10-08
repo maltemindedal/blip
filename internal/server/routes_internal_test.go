@@ -12,11 +12,11 @@ import (
 func newRoutes(t *testing.T) *http.ServeMux {
 	t.Helper()
 
-	return SetupRoutesWithHub(startTestHub(t, nil))
+	return setupRoutes(startTestHub(t, nil))
 }
 
 // TestSetupRoutes tests the route setup function.
-// It verifies that SetupRoutesWithHub returns a properly configured ServeMux
+// It verifies that setupRoutes returns a properly configured ServeMux
 // with the expected routes and handlers properly registered.
 func TestSetupRoutes(t *testing.T) {
 	t.Parallel()
@@ -25,7 +25,7 @@ func TestSetupRoutes(t *testing.T) {
 
 	// Test that the mux is not nil
 	if mux == nil {
-		t.Fatal("SetupRoutesWithHub returned nil mux")
+		t.Fatal("setupRoutes returned nil mux")
 	}
 
 	// Test that the root route is properly configured
