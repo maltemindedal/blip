@@ -14,8 +14,8 @@ import (
 //go:embed testpage.html
 var testPageHTML []byte
 
-// HealthResponse is the exact body served by [healthHandler]. It is exported so
-// tests assert against the served text rather than a copy of it.
+// HealthResponse is the exact body served at /. It is exported so tests assert
+// against the served text rather than a copy of it.
 const HealthResponse = "Blip server is running!"
 
 var (

@@ -38,13 +38,15 @@ type clientConn interface {
 //
 // A Hub is built by the [Service] that owns it and reached through
 // [Service.Hub]. Its zero value is not usable: its channels are never made, so
-// [Hub.ClientCount] on one would block forever.
+// [Hub.ClientCount] on one would block forever. Even the Service's own hub
+// answers ClientCount only once its run loop has started, which [Service.Run]
+// and [Service.Serve] do; until then ClientCount blocks.
 //
 // The clients map is owned exclusively by the hub's run loop: registration,
 // unregistration, broadcast fan-out, and shutdown all happen there. That single
 // ownership removes lock traffic from the broadcast path entirely, so every
-// mutation of clients must be reached through [Hub.register], [Hub.unregister],
-// or [Hub.publish], which hand the work to that goroutine over a channel.
+// mutation of clients must be reached through the hub's register, unregister
+// and publish methods, which hand the work to that goroutine over a channel.
 type Hub struct {
 	// cfg is the resolved configuration every connection of this hub runs
 	// under: its origin allow-list, its message size limit, and its rate
@@ -145,8 +147,9 @@ func (h *Hub) publish(msg broadcastMessage) bool {
 
 // ClientCount reports how many clients are currently registered. The count is
 // answered by the run loop, which owns the map, so it is consistent with
-// every registration and broadcast the hub has already processed. It returns 0
-// once the hub has stopped.
+// every registration and broadcast the hub has already processed. It blocks
+// until the run loop has started, which [Service.Run] and [Service.Serve] do,
+// and returns 0 once the hub has stopped.
 func (h *Hub) ClientCount() int {
 	reply := make(chan int, 1)
 
@@ -160,8 +163,10 @@ func (h *Hub) ClientCount() int {
 
 // stopping returns a channel that is closed once the hub begins shutting down.
 // A client goroutine that blocks on anything the shutdown must interrupt selects
-// on it. It is receive-only, so nothing outside the hub can close or send on the
-// channel the hub's own shutdown sequence depends on.
+// on it. It is receive-only, so code holding what it returns cannot close or
+// send on the channel the hub's own shutdown sequence depends on. That covers
+// only what goes through stopping: the quit field is visible to the whole
+// package, so code outside hub.go leaving it alone is a convention.
 func (h *Hub) stopping() <-chan struct{} {
 	return h.quit
 }

@@ -65,7 +65,8 @@ drive the real thing rather than a copy of it. What the package exports is that 
 `Config` it is built from, the logger setup `main` calls, the `Message` wire type, the
 `HealthResponse` body that `/` serves, and, through `Service.Hub()`, two read-only views of the hub
 (`ClientCount`, `IsStopped`) for tests to observe. `Hub` has no exported constructor: its zero value
-is unusable, so the only working one is the one `Service.Hub()` returns.
+is unusable, so the only working one is the one `Service.Hub()` returns, and even that one's
+`ClientCount` blocks until `Run` or `Serve` has started its run loop.
 
 **Hub** (`hub.go`) — owns the set of connected clients and the configuration they run under.
 `newHub(cfg)` resolves the configuration once and keeps it, so the origin allow-list, the message
@@ -91,8 +92,9 @@ the map next to the key instead of one pointer hop away in the client's own memo
 
 Those channels are the hub's own, though — nothing outside it sends on them. The one signal a client
 does need, that shutdown has begun, it reads through `stopping()`, which hands out the `quit`
-channel receive-only, so the compiler rather than convention keeps the client from closing or sending
-on it. What the hub offers the rest of the package is intent: `register(ctx, client)`,
+channel receive-only: what `stopping()` returns cannot be closed or sent on. The `quit` field itself
+is visible to the whole package, so code outside `hub.go` leaving it alone is still a convention,
+one that going through `stopping()` makes easy to keep. What the hub offers the rest of the package is intent: `register(ctx, client)`,
 `unregister(client)`, and `publish(msg)`. Each one owns the race a raw channel send would leave to
 its caller, because the run loop stops reading the moment shutdown is signalled: `register` and
 `publish` report `false` instead of blocking forever, and `unregister` becomes a no-op. Registration additionally gives up when the request context is done, so a client
@@ -238,9 +240,12 @@ has no listener to close, and the listener would otherwise be closed only after 
 returned. If that goroutine reports that the listener had already failed on its own, `Serve` returns
 that failure rather than letting the cancellation hide it.
 
-The `quit` channel appears in every blocking select in the codebase — inside `register`,
-`unregister`, and `publish`, and in the write pump's own event loop — so nothing can block shutdown
-by waiting on a channel nobody will read.
+Every send to the run loop — in `register`, `unregister`, and `publish` — and the write pump's own
+event loop also select on the `quit` channel, so none of them can block shutdown by waiting on a run
+loop that has stopped reading. The other blocking waits are bounded in other ways: `ClientCount`
+selects on `done`, which closes when the run loop exits; each shutdown stage waits under its own
+deadline; `Serve`'s last receive from its serving goroutine completes once `http.Server.Shutdown`
+has run; and `writeFrame` receives only messages it has already counted as buffered.
 
 ## Concurrency model
 

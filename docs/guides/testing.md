@@ -89,13 +89,13 @@ These pass `-coverpkg=./cmd/...,./internal/...` so coverage is attributed to the
 rather than to the test packages, and print `go tool cover -func` at the end. Open `coverage.html`
 in a browser for the annotated source.
 
-`make test-coverage` measured **82.4% of statements** on 2026-10-08 (unit 65.7%, integration 69.3%;
-integration varies by about a point from run to run). That figure spans `./cmd/...` and
-`./internal/...` together, and `cmd/server` has no tests of its own, so `internal/server` alone
-measures higher — 85.0% with `-coverpkg=./internal/...`. The same
-number appears in the [README](../../README.md#status); update both together. CI collects coverage
-and uploads it to Codecov but does not enforce a threshold — nothing fails a build for dropping
-coverage.
+`make test-coverage` measured **83.9% of statements** on 2026-10-08, the same on two runs (unit
+70.6% on both; integration 69.9% and 70.6%, as it varies by about a point from run to run). That
+figure spans `./cmd/...` and `./internal/...` together, and `cmd/server` has no tests of its own, so
+`internal/server` alone measures higher — 86.5% and 86.9% on the same two runs with
+`-coverpkg=./internal/...`. The same number appears in the [README](../../README.md#status); update
+both together. CI collects coverage and uploads it to Codecov but does not enforce a threshold —
+nothing fails a build for dropping coverage.
 
 ## Helpers
 
@@ -124,7 +124,8 @@ opened before the service is built, so its own origin is already on the allow-li
 
 Follow the conventions already in the suite:
 
-- Name tests `TestSubjectBehavior` — `TestWebSocketOriginValidation`, `TestHubShutdownTimeout`.
+- Name tests `TestSubjectBehavior` — `TestWebSocketOriginValidation`,
+  `TestHubShutdownReturnsPromptlyWhenIdle`.
 - Put a test that needs only the exported API, and talks to the running service the way a client
   does, in `test/integration`. Put a test that needs unexported code in `internal/server`, in the
   `_internal_test.go` file named after the file it covers, even when it opens a listener of its own.

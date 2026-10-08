@@ -104,7 +104,7 @@ instances behind a load balancer form separate chat rooms — see
 [scaling](docs/guides/deploying-to-production.md#scaling). There is no built-in authentication;
 enforce it in front of `/ws` if your data needs it.
 
-Test coverage was 82.4% of statements as of 2026-10-08 (`make test-coverage`). Broadcast fan-out and
+Test coverage was 83.9% of statements as of 2026-10-08 (`make test-coverage`). Broadcast fan-out and
 rate limiting are allocation-free per message, and the origin check is allocation-free per
 handshake — see
 [performance](docs/architecture/overview.md#performance) for the numbers and `make bench` to

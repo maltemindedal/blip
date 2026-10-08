@@ -19,9 +19,9 @@ const (
 	sendBufferSz = 256
 )
 
-// wsClient represents a WebSocket wsClient connection in the chat system.
+// wsClient represents a WebSocket client connection in the chat system.
 // It manages the connection state, message sending channel, hub reference,
-// and wsClient address information.
+// and client address information.
 type wsClient struct {
 	conn           *websocket.Conn
 	send           chan []byte
