@@ -246,19 +246,35 @@ func TestNewConfig(t *testing.T) {
 // TestResolveConfigRecordsTheEffectiveAllowList pins that the resolved
 // configuration's AllowedOrigins is the allow-list the hub enforces: entries
 // trimmed and lowercased, blank entries and entries without a scheme dropped,
-// and "*" left to the origin policy rather than listed. Nothing in production
-// reads the field today; this keeps a future reader, such as a startup log of
-// the allow-list, from reporting entries the policy ignores.
+// and "*" kept as itself, so a list that allows everything does not read as one
+// that allows nothing. Nothing in production reads the field today; this keeps a
+// future reader, such as a startup log of the allow-list, from reporting
+// something other than what the policy does.
 //
 // It does not check the policy's decisions; TestOriginPolicyAllows does.
 func TestResolveConfigRecordsTheEffectiveAllowList(t *testing.T) {
 	t.Parallel()
 
-	resolved := resolveConfig(&Config{
-		AllowedOrigins: []string{"  HTTPS://Chat.Example.com  ", "*", "example.com", ""},
-	})
+	tests := []struct {
+		name       string
+		configured []string
+		want       []string
+	}{
+		{
+			"entries normalized and invalid ones dropped",
+			[]string{"  HTTPS://Chat.Example.com  ", "*", "example.com", ""},
+			[]string{"https://chat.example.com", "*"},
+		},
+		{"star alone", []string{" * "}, []string{"*"}},
+	}
 
-	if want := []string{"https://chat.example.com"}; !slices.Equal(resolved.AllowedOrigins, want) {
-		t.Errorf("resolved AllowedOrigins = %q, want %q", resolved.AllowedOrigins, want)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resolved := resolveConfig(&Config{AllowedOrigins: tt.configured})
+
+			if !slices.Equal(resolved.AllowedOrigins, tt.want) {
+				t.Errorf("resolved AllowedOrigins = %q, want %q", resolved.AllowedOrigins, tt.want)
+			}
+		})
 	}
 }

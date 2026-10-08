@@ -25,8 +25,8 @@ type originPolicy struct {
 // "*" allows every origin, and anything that does not parse as an origin is
 // logged and ignored rather than aborting startup.
 //
-// It also returns the origins it kept, normalized and in their configured
-// order, without "*": the allow-list as enforced, for the resolved
+// It also returns the entries it kept, normalized and in their configured
+// order, with "*" kept as itself: the allow-list as enforced, for the resolved
 // configuration to record. That list is nil when nothing was configured.
 func newOriginPolicy(configured []string) (originPolicy, []string) {
 	policy := originPolicy{origins: make(map[string]struct{}, len(configured))}
@@ -44,6 +44,7 @@ func newOriginPolicy(configured []string) (originPolicy, []string) {
 
 		if trimmed == "*" {
 			policy.allowAll = true
+			kept = append(kept, trimmed)
 			continue
 		}
 
