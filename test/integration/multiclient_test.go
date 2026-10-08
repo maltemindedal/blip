@@ -9,7 +9,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -55,7 +54,7 @@ func TestMultipleClientsMessageExchange(t *testing.T) {
 // newMulticlientServer starts a server whose rate limit is wide enough that the
 // multi-client tests measure fan-out rather than throttling — rate limiting has
 // its own coverage in security_test.go.
-func newMulticlientServer(t *testing.T) (*httptest.Server, *server.Hub) {
+func newMulticlientServer(t *testing.T) (*testService, *server.Hub) {
 	t.Helper()
 
 	return newConfiguredTestServer(t, func(cfg *server.Config) {

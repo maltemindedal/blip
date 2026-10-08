@@ -6,7 +6,7 @@
 // as expected when all components are assembled together.
 //
 // This file holds the plumbing the other files in the package share: starting a
-// server backed by its own hub, dialing clients and waiting for the hub to
+// real service with a hub of its own, dialing clients and waiting for the hub to
 // register them, and the small assertions used throughout.
 package integration
 
@@ -16,7 +16,6 @@ import (
 	"errors"
 	"net"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"sync"
 	"testing"
@@ -72,10 +71,13 @@ func startHub(t *testing.T, cfg *server.Config) *server.Hub {
 	return hub
 }
 
-// testService is a real [server.Service] running on a real port, driven exactly
-// the way main drives it: New, then Run under a context the test cancels.
+// testService is a real [server.Service] running on a real port under a context
+// the test cancels.
 type testService struct {
 	*server.Service
+
+	// URL is the service's base URL, http://host:port.
+	URL string
 
 	addr string
 	stop context.CancelFunc
@@ -85,9 +87,20 @@ type testService struct {
 	runErr error
 }
 
-// startService runs a service on port, bound to [loopbackHost], and returns once
-// it is accepting requests. It is stopped when the test ends if the test did not
-// stop it itself.
+// launch runs svc through run — its Run, or its Serve on a listener — on a
+// goroutine of its own, until the returned service is shut down.
+func launch(svc *server.Service, addr string, run func(context.Context) error) *testService {
+	ctx, cancel := context.WithCancel(context.Background())
+	s := &testService{Service: svc, URL: "http://" + addr, addr: addr, stop: cancel, done: make(chan error, 1)}
+
+	go func() { s.done <- run(ctx) }()
+	return s
+}
+
+// startService runs a service on port, bound to [loopbackHost], driven exactly
+// the way main drives it: New, then Run under a context the test cancels. It
+// returns once the service is accepting requests, and stops it when the test
+// ends if the test did not stop it itself.
 func startService(t *testing.T, port string) *testService {
 	t.Helper()
 
@@ -102,17 +115,12 @@ func startService(t *testing.T, port string) *testService {
 
 	svc := server.New(cfg)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	svcTest := &testService{Service: svc, addr: addr, stop: cancel, done: make(chan error, 1)}
-
-	go func() { svcTest.done <- svc.Run(ctx) }()
+	svcTest := launch(svc, addr, svc.Run)
 	t.Cleanup(func() { _ = svcTest.shutdown(t) })
 
-	testhelpers.WaitForServer(t, svcTest.baseURL()+"/", shutdownBudget)
+	testhelpers.WaitForServer(t, svcTest.URL+"/", shutdownBudget)
 	return svcTest
 }
-
-func (s *testService) baseURL() string { return "http://" + s.addr }
 
 func (s *testService) wsURL() string { return "ws://" + s.addr + "/ws" }
 
@@ -133,47 +141,51 @@ func (s *testService) shutdown(t *testing.T) error {
 	return s.runErr
 }
 
-// newTestServer starts an HTTP server backed by a hub of its own, taking the
-// default configuration plus its own origin. Use [newConfiguredTestServer] when
-// the test varies a setting, and [startService] when the lifecycle itself is
-// under test.
-func newTestServer(t *testing.T) (*httptest.Server, *server.Hub) {
+// newTestServer starts a service with a hub of its own, taking the default
+// configuration plus its own origin. Use [newConfiguredTestServer] when the test
+// varies a setting, and [startService] when Run itself is under test.
+func newTestServer(t *testing.T) (*testService, *server.Hub) {
 	t.Helper()
 
 	return newConfiguredTestServer(t, nil)
 }
 
-// newConfiguredTestServer starts an HTTP server backed by a hub of its own,
+// newConfiguredTestServer starts a real service on an ephemeral loopback port,
 // configured by customize, so both the client counts and the settings a test
-// observes belong to that test alone. Both are torn down when the test ends.
+// observes belong to that test alone. It is stopped when the test ends.
 //
 // The hub owns its configuration, so that configuration has to exist before the
-// hub does: the listener is opened first and its URL is already on the
+// service does: the listener is opened first and its URL is already on the
 // allow-list when customize runs. A customize that replaces AllowedOrigins
 // outright is testing the allow-list itself, and overrides that.
-func newConfiguredTestServer(t *testing.T, customize func(cfg *server.Config)) (*httptest.Server, *server.Hub) {
+func newConfiguredTestServer(t *testing.T, customize func(cfg *server.Config)) (*testService, *server.Hub) {
 	t.Helper()
 
-	var hub *server.Hub
+	ln, err := net.Listen("tcp", loopbackHost+":0")
+	if err != nil {
+		t.Fatalf("Failed to listen: %v", err)
+	}
+	addr := ln.Addr().String()
 
-	httpServer := testhelpers.CreateTestServer(t, func(baseURL string) http.Handler {
-		cfg := server.NewConfig()
-		cfg.AllowedOrigins = append([]string{baseURL}, cfg.AllowedOrigins...)
-		if customize != nil {
-			customize(cfg)
+	cfg := server.NewConfig()
+	cfg.AllowedOrigins = append([]string{"http://" + addr}, cfg.AllowedOrigins...)
+	if customize != nil {
+		customize(cfg)
+	}
+
+	svc := server.New(cfg)
+	svcTest := launch(svc, addr, func(ctx context.Context) error { return svc.Serve(ctx, ln) })
+	t.Cleanup(func() {
+		if err := svcTest.shutdown(t); err != nil {
+			t.Errorf("Failed to shut down the test service: %v", err)
 		}
-
-		hub = startHub(t, cfg)
-		t.Cleanup(func() {
-			if err := hub.Shutdown(shutdownContext(t, shutdownBudget)); err != nil {
-				t.Errorf("Failed to shut down the test hub: %v", err)
-			}
-		})
-
-		return server.SetupRoutesWithHub(hub)
 	})
 
-	return httpServer, hub
+	// ClientCount is answered by the hub's run loop, so a reply proves Serve has
+	// started it; the listener is already open, so dials queue until it accepts.
+	svc.Hub().ClientCount()
+
+	return svcTest, svc.Hub()
 }
 
 // buildWebSocketURL constructs a WebSocket URL from the test server URL

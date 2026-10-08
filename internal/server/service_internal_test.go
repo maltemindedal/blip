@@ -182,3 +182,39 @@ func TestRunDrainsTheHubWhenTheListenerFails(t *testing.T) {
 		t.Error("Expected the hub to be stopped after the listener failed")
 	}
 }
+
+// TestServeDrainsTheHubWhenTheListenerFails pins that Serve runs Run's
+// lifecycle rather than a copy of it: a listener that fails — here, one already
+// closed — drains the hub Serve started instead of leaving it running, and the
+// accept error stays reachable through the error Serve returns.
+func TestServeDrainsTheHubWhenTheListenerFails(t *testing.T) {
+	t.Parallel()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Failed to listen: %v", err)
+	}
+	_ = ln.Close()
+
+	svc := New(nil)
+
+	// A deadline, so a regression that keeps serving fails here instead of
+	// blocking until the test binary times out.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	serveErr := svc.Serve(ctx, ln)
+
+	if serveErr == nil {
+		t.Fatal("Expected Serve to fail on a closed listener")
+	}
+	if !strings.HasPrefix(serveErr.Error(), "http server: serve: ") {
+		t.Errorf("Unexpected error text %q", serveErr)
+	}
+	if !errors.Is(serveErr, net.ErrClosed) {
+		t.Errorf("Expected the accept error to stay reachable, got %v", serveErr)
+	}
+	if !svc.Hub().IsStopped() {
+		t.Error("Expected the hub to be stopped after the listener failed")
+	}
+}

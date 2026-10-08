@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"time"
 )
@@ -18,8 +19,9 @@ const (
 )
 
 // Service is the running server: one hub, the routes bound to it, and the HTTP
-// server that serves them. Constructing and running it are the only two things
-// a caller does, so the shutdown ordering cannot be got wrong from outside.
+// server that serves them. Constructing it and running it, with [Service.Run] or
+// [Service.Serve], are the only things a caller does, so the shutdown ordering
+// cannot be got wrong from outside.
 type Service struct {
 	hub        *Hub
 	httpServer *http.Server
@@ -57,21 +59,47 @@ func (s *Service) Hub() *Hub {
 	return s.hub
 }
 
-// Run starts the hub and serves HTTP until the listener fails or ctx is done.
-// A listener failure drains the hub, so nothing outlives the call, and is
-// returned wrapped, joined with the drain's error if that overran its budget.
-// Cancelling ctx drains the service and returns nil once it has stopped, or the
-// drain's error if a stage overran its budget.
+// Run starts the hub and serves HTTP on the configured port until the listener
+// fails or ctx is done. A listener failure drains the hub, so nothing outlives
+// the call, and is returned wrapped, joined with the drain's error if that
+// overran its budget. Cancelling ctx drains the service and returns nil once it
+// has stopped, or the drain's error if a stage overran its budget.
 func (s *Service) Run(ctx context.Context) error {
+	return s.run(ctx, s.httpServer.Addr, func() error {
+		if err := s.httpServer.ListenAndServe(); err != nil {
+			return fmt.Errorf("listen and serve: %w", err)
+		}
+		return nil
+	})
+}
+
+// Serve is [Service.Run] on a listener the caller has already opened, in place
+// of the configured port; it closes ln before returning. It exists for a caller
+// that needs the address before the service is built — a test listening on an
+// ephemeral port, whose own origin has to be on the allow-list — and runs the
+// same lifecycle, drain included.
+func (s *Service) Serve(ctx context.Context, ln net.Listener) error {
+	return s.run(ctx, ln.Addr().String(), func() error {
+		if err := s.httpServer.Serve(ln); err != nil {
+			return fmt.Errorf("serve: %w", err)
+		}
+		return nil
+	})
+}
+
+// run is the lifecycle [Service.Run] and [Service.Serve] share: start the hub,
+// serve on serve's goroutine, and drain on cancellation or a listener failure.
+// addr is only logged.
+func (s *Service) run(ctx context.Context, addr string, serve func() error) error {
 	s.hub.Start()
 	log().Info("hub started and ready to manage WebSocket connections")
 
 	serverErrors := make(chan error, 1)
 	go func() {
-		log().Info("server listening", "addr", s.httpServer.Addr)
+		log().Info("server listening", "addr", addr)
 
-		if err := s.httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			serverErrors <- fmt.Errorf("listen and serve: %w", err)
+		if err := serve(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			serverErrors <- err
 			return
 		}
 

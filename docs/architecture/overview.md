@@ -53,9 +53,10 @@ package comment on each file describes that file's slice of responsibility.
 
 ## Components
 
-**Service** (`service.go`) — the whole running server behind two functions. `New(cfg)` builds the
-hub, the routes bound to it, and the `http.Server` that fronts them; `Run(ctx)` starts them and
-drains them when `ctx` is cancelled. Nothing else is exported from the lifecycle, so the shutdown
+**Service** (`service.go`) — the whole running server behind `New` and `Run`. `New(cfg)` builds the
+hub, the routes bound to it, and the `http.Server` that fronts them; `Run(ctx)` starts them on the
+configured port and drains them when `ctx` is cancelled. `Serve(ctx, ln)` is the same lifecycle on a
+listener the caller has already opened, for a caller that needs the address first. Nothing else is exported from the lifecycle, so the shutdown
 ordering below cannot be got wrong by a caller — including a test, which is why the tests drive the
 real thing rather than a copy of it.
 
@@ -207,7 +208,9 @@ its messages being queued indefinitely.
 builds the mux, and constructs the `http.Server` with 15s read/write and 60s idle timeouts. `Run` starts the hub
 goroutine, calls `ListenAndServe` in a goroutine, and blocks on either a listener error or the
 context being done. A listener error drains the hub before `Run` returns it, so a failed listen
-leaves no goroutines behind.
+leaves no goroutines behind. `Serve` shares all of this; it only replaces `ListenAndServe` with
+`http.Server.Serve` on the caller's listener, which is how the integration tests run a real service
+on an ephemeral port whose origin they know before the service is built.
 
 **Shutdown**, on cancellation, in strict order with a 30-second overall cap. `Run` builds one
 `context.Context` carrying that cap and derives a 15-second child for each stage, so a stage that

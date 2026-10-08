@@ -49,7 +49,7 @@ func TestFullServerIntegration(t *testing.T) {
 
 	svc := startService(t, ":18086")
 
-	resp := testhelpers.MakeRequest(t, http.MethodGet, svc.baseURL()+"/")
+	resp := testhelpers.MakeRequest(t, http.MethodGet, svc.URL+"/")
 	testhelpers.AssertStatusCode(t, resp, http.StatusOK)
 	testhelpers.AssertContentType(t, resp, "text/plain")
 	testhelpers.AssertBody(t, resp, server.HealthResponse)

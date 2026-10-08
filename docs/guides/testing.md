@@ -25,9 +25,10 @@ test/
     └── helpers.go
 ```
 
-Integration tests spin up `httptest` servers and dial them with a real `gorilla/websocket` client,
-so they exercise the actual handshake, origin check, and pumps. The lifecycle tests go further and
-run the real `server.Service` on a real port, driven the way `main` drives it.
+Integration tests run the real `server.Service` on an ephemeral loopback port, through
+`Service.Serve`, and dial it with a real `gorilla/websocket` client, so they exercise the actual
+handshake, origin check, and pumps. The lifecycle tests go further and start it through `Run` on a
+fixed port, driven the way `main` drives it.
 
 The exception is `internal/server/*_internal_test.go`, which covers what the exported API cannot
 reach: the hot paths the benchmarks measure, the `*http.Server` that `New` builds — its address,
@@ -115,9 +116,9 @@ usually has to allow the server's own origin — which means the config, and the
 exist before the handler does. The listener is opened first and its URL passed to `build`.
 
 The `integration` package layers its own helpers on top in `setup_test.go` — `newTestServer` (a
-server backed by a hub of its own, on the default settings), `newConfiguredTestServer` (the same,
-with a callback that varies the config first), `startService` (the real `server.Service`, running on
-a real port, stopped by cancelling its context), `dial` / `dialPair` / `dialClients` (which return
+real `server.Service` with a hub of its own, on an ephemeral port and the default settings),
+`newConfiguredTestServer` (the same, with a callback that varies the config first), `startService`
+(the same service started through `Run` on a fixed port, stopped by cancelling its context), `dial` / `dialPair` / `dialClients` (which return
 only once the hub has registered every connection), and `waitForUnregister`. Prefer those inside that
 package: they make client-count assertions exact.
 
@@ -132,7 +133,7 @@ Follow the conventions already in the suite:
   and shutdown ordering.
 - Own your state, then run in parallel. Nothing configurable is process-wide: give a test its own hub
   with `server.NewHub(cfg)` and `server.SetupRoutesWithHub`, or a whole service of its own with the
-  integration package's `startService`, so both the client counts and the settings it observes belong
+  integration package's `newConfiguredTestServer`, so both the client counts and the settings it observes belong
   to it alone. A test that does that should call `t.Parallel()`. The one thing still shared by the
   process is the logger, so `TestShutdownStopsAcceptingBeforeDrainingClients` — which reads the
   shutdown ordering off `server.SetLogger` — stays serial. Fixed listen ports are fine in parallel as
