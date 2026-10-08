@@ -16,7 +16,6 @@ import (
 	"errors"
 	"net"
 	"net/http"
-	"net/url"
 	"sync"
 	"testing"
 	"time"
@@ -28,7 +27,6 @@ import (
 
 const (
 	errMsgReadDeadline = "Failed to set read deadline: %v"
-	errMsgParseURL     = "Failed to parse test server URL: %v"
 
 	// registerWait is how long a test will wait for the hub to catch up with
 	// connections it has already established.
@@ -164,19 +162,6 @@ func newConfiguredTestServer(t *testing.T, customize func(cfg *server.Config)) (
 	svc.Hub().ClientCount()
 
 	return svcTest, svc.Hub()
-}
-
-// buildWebSocketURL constructs a WebSocket URL from the test server URL
-func buildWebSocketURL(t *testing.T, serverURL string) string {
-	t.Helper()
-
-	u, err := url.Parse(serverURL)
-	if err != nil {
-		t.Fatalf(errMsgParseURL, err)
-	}
-	u.Scheme = "ws"
-	u.Path = "/ws"
-	return u.String()
 }
 
 // dial connects one client and returns once the hub has registered it.

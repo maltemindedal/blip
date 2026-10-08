@@ -3,34 +3,22 @@ package integration
 import (
 	"errors"
 	"net"
-	"net/url"
 	"testing"
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/maltemindedal/blip/internal/server"
 	"github.com/maltemindedal/blip/test/testhelpers"
 )
 
 const errMsgFailedToClose = "Failed to close connection: %v"
-
-// errorTestServer starts a service of this test's own and returns the ws:// URL
-// of its endpoint and its hub, so a test observes exactly its own clients and
-// its own settings.
-func errorTestServer(t *testing.T) (wsURL string, hub *server.Hub) {
-	t.Helper()
-
-	testServer, hub := newTestServer(t)
-	return buildWebSocketURL(t, testServer.URL), hub
-}
 
 // TestWriteAfterCloseFails verifies that writing to a connection the client has
 // already closed reports an error rather than silently succeeding.
 func TestWriteAfterCloseFails(t *testing.T) {
 	t.Parallel()
 
-	wsURL, _ := errorTestServer(t)
-	conn := testhelpers.Dial(t, wsURL, originOf(t, wsURL))
+	testServer, _ := newTestServer(t)
+	conn := testhelpers.Dial(t, testServer.wsURL(), testServer.URL)
 
 	if err := testhelpers.SendMessage(conn, "test"); err != nil {
 		t.Fatalf("Failed to write message: %v", err)
@@ -51,8 +39,8 @@ func TestWriteAfterCloseFails(t *testing.T) {
 func TestReadDeadlineProducesTimeout(t *testing.T) {
 	t.Parallel()
 
-	wsURL, _ := errorTestServer(t)
-	conn := testhelpers.Dial(t, wsURL, originOf(t, wsURL))
+	testServer, _ := newTestServer(t)
+	conn := testhelpers.Dial(t, testServer.wsURL(), testServer.URL)
 
 	if err := conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond)); err != nil {
 		t.Fatalf("Failed to set read deadline: %v", err)
@@ -74,8 +62,8 @@ func TestReadDeadlineProducesTimeout(t *testing.T) {
 func TestClientRegistersAndUnregisters(t *testing.T) {
 	t.Parallel()
 
-	wsURL, hub := errorTestServer(t)
-	conn := testhelpers.Dial(t, wsURL, originOf(t, wsURL))
+	testServer, hub := newTestServer(t)
+	conn := testhelpers.Dial(t, testServer.wsURL(), testServer.URL)
 
 	testhelpers.WaitFor(t, 2*time.Second, "the client to register", func() bool {
 		return hub.ClientCount() == 1
@@ -96,9 +84,8 @@ func TestClientRegistersAndUnregisters(t *testing.T) {
 func TestMalformedMessageKeepsConnectionOpen(t *testing.T) {
 	t.Parallel()
 
-	wsURL, hub := errorTestServer(t)
-	origin := originOf(t, wsURL)
-	sender, receiver := testhelpers.DialPair(t, wsURL, origin)
+	testServer, hub := newTestServer(t)
+	sender, receiver := testhelpers.DialPair(t, testServer.wsURL(), testServer.URL)
 
 	testhelpers.WaitFor(t, 2*time.Second, "both clients to register", func() bool {
 		return hub.ClientCount() == 2
@@ -124,16 +111,4 @@ func TestMalformedMessageKeepsConnectionOpen(t *testing.T) {
 	if want := `{"content":"still here"}`; string(raw) != want {
 		t.Errorf("Expected %s, got %s", want, raw)
 	}
-}
-
-// originOf returns the http:// origin matching a ws:// endpoint URL.
-func originOf(t *testing.T, wsURL string) string {
-	t.Helper()
-
-	parsed, err := url.Parse(wsURL)
-	if err != nil {
-		t.Fatalf("Failed to parse WebSocket URL: %v", err)
-	}
-
-	return "http://" + parsed.Host
 }

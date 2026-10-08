@@ -25,7 +25,7 @@ func TestWebSocketEndpointIntegration(t *testing.T) {
 
 	testServer, _ := newTestServer(t)
 
-	wsURL := buildWebSocketURL(t, testServer.URL)
+	wsURL := testServer.wsURL()
 
 	t.Run("Successful WebSocket Connection", func(t *testing.T) {
 		testSuccessfulWebSocketConnection(t, wsURL, testServer.URL)
@@ -105,7 +105,7 @@ func TestWebSocketMessageBroadcasting(t *testing.T) {
 
 	testServer, hub := newTestServer(t)
 
-	wsURL := buildWebSocketURL(t, testServer.URL)
+	wsURL := testServer.wsURL()
 	connections := dialClients(t, hub, wsURL, testServer.URL, 3)
 
 	messageContent := "Hello from client 0!"
@@ -220,7 +220,7 @@ func TestWebSocketConnectionLifecycle(t *testing.T) {
 	t.Parallel()
 
 	testServer, hub := newTestServer(t)
-	wsURL := buildWebSocketURL(t, testServer.URL)
+	wsURL := testServer.wsURL()
 
 	t.Run("Connection and Disconnection", func(t *testing.T) {
 		conn := dial(t, hub, wsURL, testServer.URL)
@@ -265,7 +265,7 @@ func TestWebSocketConcurrentConnections(t *testing.T) {
 
 	testServer, _ := newTestServer(t)
 
-	wsURL := buildWebSocketURL(t, testServer.URL)
+	wsURL := testServer.wsURL()
 
 	const numConcurrentClients = 10
 	done := make(chan error, numConcurrentClients)
@@ -360,7 +360,7 @@ func TestWebSocketOriginValidation(t *testing.T) {
 		cfg.AllowedOrigins = append(cfg.AllowedOrigins, allowedOrigin)
 	})
 
-	wsURL := buildWebSocketURL(t, testServer.URL)
+	wsURL := testServer.wsURL()
 
 	t.Run("Allowed origin", func(t *testing.T) {
 		testAllowedOrigin(t, wsURL, allowedOrigin)
@@ -424,7 +424,7 @@ func TestWebSocketMessageSizeLimit(t *testing.T) {
 		cfg.MaxMessageSize = limit
 	})
 
-	sender, receiver := dialPair(t, hub, buildWebSocketURL(t, testServer.URL), testServer.URL)
+	sender, receiver := dialPair(t, hub, testServer.wsURL(), testServer.URL)
 
 	oversizedContent := strings.Repeat("A", int(limit)+10)
 	oversizedPayload := mustMarshalMessage(t, oversizedContent)
@@ -461,7 +461,7 @@ func TestWebSocketRateLimiting(t *testing.T) {
 		cfg.RateLimit = rateCfg
 	})
 
-	wsURL := buildWebSocketURL(t, testServer.URL)
+	wsURL := testServer.wsURL()
 	sender, receiver := dialPair(t, hub, wsURL, testServer.URL)
 
 	sendAndReceiveBurstMessages(t, sender, receiver, rateCfg.Burst)
