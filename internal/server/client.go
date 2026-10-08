@@ -245,7 +245,7 @@ func (c *client) extendWriteDeadline() bool {
 }
 
 // writeControl sends a close or ping frame with no payload, and reports whether
-// it was written. name identifies the frame in the debug log.
+// it was written. name identifies the frame in the debug log's frame attribute.
 func (c *client) writeControl(messageType int, name string) bool {
 	if !c.extendWriteDeadline() {
 		return false
@@ -253,7 +253,7 @@ func (c *client) writeControl(messageType int, name string) bool {
 
 	if err := c.conn.WriteMessage(messageType, nil); err != nil {
 		if !isExpectedCloseError(err) {
-			log().Debug("error writing "+name+" frame", "addr", c.addr, "error", err)
+			log().Debug("error writing control frame", "addr", c.addr, "frame", name, "error", err)
 		}
 		return false
 	}
