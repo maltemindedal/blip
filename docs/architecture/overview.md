@@ -102,7 +102,8 @@ which is what makes it a usable synchronization barrier in tests.
   `Hub.Publish`. Exits on any read error and unregisters the client.
 - *write pump* — selects over the client's 256-message `send` channel, a 54-second ping ticker, and
   the hub's `stopping()` channel. Coalesces anything already queued into the current frame, separated by
-  newlines, so a burst costs one frame rather than one per message.
+  newlines, so a burst costs one frame rather than one per message. The frame body comes from
+  `writeFrame`, a function of a writer and the queue, so that format is unit-tested without a socket.
 
 Splitting reads and writes is required by `gorilla/websocket`: at most one concurrent reader and one
 concurrent writer are allowed per connection. How many pumps that takes is the client's business, not
