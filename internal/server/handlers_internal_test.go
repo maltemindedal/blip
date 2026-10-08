@@ -7,63 +7,10 @@ import (
 	"testing"
 )
 
-// expectedHealthResponse is the handler's own constant, so a change to the
-// served text cannot pass these tests by accident.
-const expectedHealthResponse = HealthResponse
-
-// TestHealthHandlerUnit tests the health handler function in isolation.
-// It verifies that the handler responds correctly to different HTTP methods
-// and returns the expected status code and response body.
-func TestHealthHandlerUnit(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name           string
-		method         string
-		expectedStatus int
-		expectedBody   string
-	}{
-		{
-			name:           "GET request to health endpoint",
-			method:         "GET",
-			expectedStatus: http.StatusOK,
-			expectedBody:   expectedHealthResponse,
-		},
-		{
-			name:           "POST request to health endpoint",
-			method:         "POST",
-			expectedStatus: http.StatusOK,
-			expectedBody:   expectedHealthResponse,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			req, err := http.NewRequest(tt.method, "/", http.NoBody)
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			rr := httptest.NewRecorder()
-
-			healthHandler(rr, req)
-
-			if status := rr.Code; status != tt.expectedStatus {
-				t.Errorf("handler returned wrong status code: got %v want %v",
-					status, tt.expectedStatus)
-			}
-
-			if rr.Body.String() != tt.expectedBody {
-				t.Errorf("handler returned unexpected body: got %v want %v",
-					rr.Body.String(), tt.expectedBody)
-			}
-		})
-	}
-}
-
 // TestHTTPMethodsUnit tests various HTTP methods on the health endpoint.
 // It verifies that the handler responds correctly to different HTTP methods
-// including GET, POST, PUT, DELETE, PATCH, HEAD, and OPTIONS.
+// including GET, POST, PUT, DELETE, PATCH, HEAD, and OPTIONS: status 200 and the
+// HealthResponse body for each.
 func TestHTTPMethodsUnit(t *testing.T) {
 	t.Parallel()
 
@@ -95,14 +42,12 @@ func testHTTPMethod(t *testing.T, handler http.HandlerFunc, method string) {
 			method, status, http.StatusOK)
 	}
 
-	// healthHandler answers every method alike. A real server drops the body of
-	// a HEAD response, so only the status is asserted for HEAD.
-	if method != "HEAD" {
-		expected := expectedHealthResponse
-		if rr.Body.String() != expected {
-			t.Errorf("handler returned unexpected body for %s: got %v want %v",
-				method, rr.Body.String(), expected)
-		}
+	// healthHandler answers every method alike, HEAD included: it writes the
+	// body, and the recorder keeps it. A real server would drop that body for
+	// HEAD on the wire, which this test does not reach.
+	if rr.Body.String() != HealthResponse {
+		t.Errorf("handler returned unexpected body for %s: got %v want %v",
+			method, rr.Body.String(), HealthResponse)
 	}
 }
 
