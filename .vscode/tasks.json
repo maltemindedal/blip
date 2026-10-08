@@ -76,7 +76,7 @@
       "type": "shell",
       "command": "make test-coverage",
       "windows": {
-        "command": "go test -v -race -coverpkg=./cmd/...,./internal/... -coverprofile=coverage.out ./test/... && go tool cover -html=coverage.out"
+        "command": "go test -v -race -coverpkg=./cmd/...,./internal/... -coverprofile=coverage.out ./... && go tool cover -html=coverage.out"
       },
       "group": "test",
       "presentation": {
