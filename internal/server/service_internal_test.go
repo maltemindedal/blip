@@ -4,8 +4,10 @@
 package server
 
 import (
+	"bufio"
 	"context"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -267,5 +269,72 @@ func TestServeClosesItsListenerBeforeReturning(t *testing.T) {
 		if !rec.closed.Load() {
 			t.Fatal("Serve returned with its listener still open")
 		}
+	}
+}
+
+// TestServeClosesOpenConnectionsWhenTheListenerFails pins that a listener
+// failure drains the HTTP server as well as the hub: a keep-alive connection
+// accepted before the failure must not still be served once Serve has returned.
+// The listener fails by being closed from outside, which http.Server reports as
+// an accept error rather than as its own shutdown.
+//
+// It covers an idle connection, which the drain closes at once. It does not
+// cover one with a request in flight, which the drain waits for, within its
+// budget.
+func TestServeClosesOpenConnectionsWhenTheListenerFails(t *testing.T) {
+	t.Parallel()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Failed to listen: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	served := make(chan error, 1)
+	go func() { served <- New(nil).Serve(ctx, ln) }()
+
+	conn, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatalf("Failed to dial: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	reader := bufio.NewReader(conn)
+	get := func() (int, error) {
+		if _, err := conn.Write([]byte("GET / HTTP/1.1\r\nHost: blip.test\r\n\r\n")); err != nil {
+			return 0, err
+		}
+		resp, err := http.ReadResponse(reader, nil)
+		if err != nil {
+			return 0, err
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+		return resp.StatusCode, nil
+	}
+
+	if status, err := get(); err != nil || status != http.StatusOK {
+		t.Fatalf("First request got status %d, error %v; want 200", status, err)
+	}
+
+	_ = ln.Close()
+
+	select {
+	case err := <-served:
+		if err == nil {
+			t.Fatal("Serve returned nil after its listener failed")
+		}
+	case <-ctx.Done():
+		t.Fatal("Serve did not return after its listener failed")
+	}
+
+	if err := conn.SetDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatalf("Failed to set a deadline: %v", err)
+	}
+	if status, err := get(); err == nil {
+		t.Errorf("A connection accepted before the failure got status %d after Serve returned", status)
 	}
 }

@@ -213,8 +213,8 @@ its messages being queued indefinitely.
 **Startup** (`New`, then `Run`): `New` hands the config to the hub, which resolves and keeps it,
 builds the mux, and constructs the `http.Server` with 15s read/write and 60s idle timeouts. `Run` starts the hub
 goroutine, calls `ListenAndServe` in a goroutine, and blocks on either a listener error or the
-context being done. A listener error drains the hub before `Run` returns it, so a failed listen
-leaves no goroutines behind. `Serve` shares all of this; it only replaces `ListenAndServe` with
+context being done. A listener error runs the same two-stage drain as cancellation before `Run`
+returns it, so neither the hub nor a connection the server had already accepted outlives the call. `Serve` shares all of this; it only replaces `ListenAndServe` with
 `http.Server.Serve` on the caller's listener, which is how the integration tests run a real service
 on an ephemeral port whose origin they know before the service is built.
 
