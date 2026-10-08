@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -216,5 +217,51 @@ func TestServeDrainsTheHubWhenTheListenerFails(t *testing.T) {
 	}
 	if !svc.Hub().IsStopped() {
 		t.Error("Expected the hub to be stopped after the listener failed")
+	}
+}
+
+// closeRecordingListener records whether anything has closed it, so a test can
+// check that a listener is closed at a given moment rather than eventually.
+type closeRecordingListener struct {
+	net.Listener
+	closed atomic.Bool
+}
+
+func (l *closeRecordingListener) Close() error {
+	l.closed.Store(true)
+	return l.Listener.Close()
+}
+
+// TestServeClosesItsListenerBeforeReturning pins the promise in Serve's doc
+// comment: ln is closed by the time Serve returns. The case that broke it is a
+// context already cancelled when Serve starts: the drain can then finish before
+// the serving goroutine has reached http.Server.Serve, so Shutdown has no
+// listener to close, and the goroutine closes it only after Serve has returned.
+// That goroutine is scheduled at random, so the test runs the case many times.
+//
+// It reaches Run only through the lifecycle Run shares with Serve: Run's own
+// listener is opened inside ListenAndServe, where a test cannot observe it.
+func TestServeClosesItsListenerBeforeReturning(t *testing.T) {
+	t.Parallel()
+
+	const rounds = 200
+
+	for range rounds {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("Failed to listen: %v", err)
+		}
+		t.Cleanup(func() { _ = ln.Close() })
+		rec := &closeRecordingListener{Listener: ln}
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		if err := New(nil).Serve(ctx, rec); err != nil {
+			t.Fatalf("Serve returned %v after a cancelled context, want nil", err)
+		}
+		if !rec.closed.Load() {
+			t.Fatal("Serve returned with its listener still open")
+		}
 	}
 }

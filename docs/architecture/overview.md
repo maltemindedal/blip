@@ -227,7 +227,10 @@ overruns cannot borrow the other's budget:
    share the one 15-second deadline.
 
 The two errors are joined rather than short-circuited, so a hub that overran is still reported when
-the HTTP stage failed too.
+the HTTP stage failed too. `Run` then waits for the goroutine that called `ListenAndServe` (or, for
+`Serve`, `http.Server.Serve`) to return: when cancellation comes before that goroutine has started
+serving, `http.Server.Shutdown` has no listener to close, and the listener would otherwise be
+closed only after `Run` had returned.
 
 The `quit` channel appears in every blocking select in the codebase — inside `register`,
 `unregister`, and `publish`, and in the write pump's own event loop — so nothing can block shutdown

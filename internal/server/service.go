@@ -63,7 +63,8 @@ func (s *Service) Hub() *Hub {
 // fails or ctx is done. A listener failure drains the hub, so nothing outlives
 // the call, and is returned wrapped, joined with the drain's error if that
 // overran its budget. Cancelling ctx drains the service and returns nil once it
-// has stopped, or the drain's error if a stage overran its budget.
+// has stopped — the listener included — or the drain's error if a stage
+// overran its budget.
 func (s *Service) Run(ctx context.Context) error {
 	return s.run(ctx, s.httpServer.Addr, func() error {
 		if err := s.httpServer.ListenAndServe(); err != nil {
@@ -119,8 +120,18 @@ func (s *Service) run(ctx context.Context, addr string, serve func() error) erro
 	case <-ctx.Done():
 		log().Info("shutdown signal received; draining connections")
 
-		if err := s.shutdown(); err != nil {
-			return fmt.Errorf("graceful shutdown: %w", err)
+		shutdownErr := s.shutdown()
+
+		// The serving goroutine may not have reached Serve or ListenAndServe
+		// when the drain ran, and Shutdown cannot close a listener it has not
+		// seen. Once Shutdown has run, both return ErrServerClosed as soon as
+		// they start, closing the listener on the way out, so this wait is
+		// short; it is what keeps the listener from outliving the call. What
+		// the goroutine reports is moot after a shutdown, so it is dropped.
+		<-serverErrors
+
+		if shutdownErr != nil {
+			return fmt.Errorf("graceful shutdown: %w", shutdownErr)
 		}
 
 		log().Info("server stopped gracefully")
