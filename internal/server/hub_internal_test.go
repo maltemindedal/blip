@@ -3,8 +3,6 @@ package server
 import (
 	"context"
 	"log/slog"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"strconv"
 	"testing"
@@ -15,14 +13,6 @@ import (
 func TestMain(m *testing.M) {
 	SetLogger(slog.New(slog.DiscardHandler))
 	os.Exit(m.Run())
-}
-
-func newOriginRequest(tb testing.TB, origin string) *http.Request {
-	tb.Helper()
-
-	req := httptest.NewRequest(http.MethodGet, "/ws", nil)
-	req.Header.Set("Origin", origin)
-	return req
 }
 
 // fakeClient is the test-side [clientConn]: an inbox and an address, with no
@@ -508,18 +498,5 @@ func BenchmarkRateLimiterAllow(b *testing.B) {
 	b.ReportAllocs()
 	for b.Loop() {
 		rl.allow()
-	}
-}
-
-func BenchmarkOriginCheck(b *testing.B) {
-	cfg := resolveConfig(&Config{AllowedOrigins: []string{"http://localhost:8080", "https://example.com"}})
-
-	req := newOriginRequest(b, "https://example.com")
-
-	b.ReportAllocs()
-	for b.Loop() {
-		if !cfg.isOriginAllowed(req) {
-			b.Fatal("expected origin to be allowed")
-		}
 	}
 }

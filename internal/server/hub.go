@@ -50,7 +50,8 @@ type Hub struct {
 	// paths read it without synchronization.
 	cfg resolvedConfig
 
-	// upgrader is this hub's own, because its CheckOrigin closes over cfg.
+	// upgrader is this hub's own, because its CheckOrigin closes over the
+	// hub's origin policy.
 	upgrader websocket.Upgrader
 
 	// clients maps every registered client to the inbox it was registered with.
@@ -95,7 +96,7 @@ func NewHub(cfg *Config) *Hub {
 		done:       make(chan struct{}),
 	}
 
-	h.upgrader = newUpgrader(&h.cfg)
+	h.upgrader = newUpgrader(h.cfg.origins)
 	return h
 }
 

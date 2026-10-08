@@ -33,15 +33,15 @@ var (
 var writeBufferPool = &sync.Pool{}
 
 // newUpgrader builds the upgrader for one hub. CheckOrigin is bound to that
-// hub's resolved configuration, so the allow-list is per hub rather than per
-// process; the write buffer pool is deliberately not, since sharing it is what
-// keeps memory flat as the connection count grows.
-func newUpgrader(cfg *resolvedConfig) websocket.Upgrader {
+// hub's origin policy, so the allow-list is per hub rather than per process; the
+// write buffer pool is deliberately not, since sharing it is what keeps memory
+// flat as the connection count grows.
+func newUpgrader(origins originPolicy) websocket.Upgrader {
 	return websocket.Upgrader{
 		ReadBufferSize:  1024,
 		WriteBufferSize: 1024,
 		WriteBufferPool: writeBufferPool,
-		CheckOrigin:     cfg.checkOrigin,
+		CheckOrigin:     origins.checkOrigin,
 	}
 }
 

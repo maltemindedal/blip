@@ -136,10 +136,13 @@ function-valued field would add an indirect call to the hot path and a word to e
 seam costs neither — `newRateLimiterAt` inlines into its wrapper, `allow` is one static call into
 `allowAt`, and the struct is unchanged.
 
-**Origin validation** (`origin.go`) — normalizes the `Origin` header to lowercase `scheme://host` and
-looks it up in a set built once when the hub is constructed. It is a method on that hub's resolved
-configuration, bound into the hub's own upgrader as `CheckOrigin`, so rejection happens before any
-connection resources are allocated. Headers that are already canonical — which is what browsers send
+**Origin validation** (`origin.go`) — an `originPolicy`, built once when the hub is constructed:
+the allow-list normalized to lowercase `scheme://host` in a lookup set, and whether it contained `*`.
+Everything about origins lives in that one type — reading the configured list, `*`, dropping invalid
+entries, and the check itself — so its rules are unit-tested over plain strings. The hub's resolved
+configuration holds it, and its `checkOrigin` is bound into the hub's own upgrader as `CheckOrigin`,
+so rejection happens before any connection resources are allocated. The check normalizes the
+`Origin` header the same way, but headers that are already canonical — which is what browsers send
 — match the set directly and skip URL parsing entirely. A request with no `Origin` header is always
 rejected, even when the allow-list contains `*`.
 

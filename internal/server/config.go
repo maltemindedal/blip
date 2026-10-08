@@ -39,14 +39,13 @@ type Config struct {
 }
 
 // resolvedConfig is an immutable, fully resolved view of the configuration:
-// defaults substituted and the origin allow-list turned into a lookup set. A
-// [Hub] owns one, built once at construction, so the hot paths (origin checks,
+// defaults substituted and the origin allow-list turned into an [originPolicy].
+// A [Hub] owns one, built once at construction, so the hot paths (origin checks,
 // client construction) read it without locking and two hubs in one process can
 // be configured differently.
 type resolvedConfig struct {
 	Config
-	origins  map[string]struct{}
-	allowAll bool
+	origins originPolicy
 }
 
 func defaultConfig() Config {
@@ -62,7 +61,7 @@ func defaultConfig() Config {
 }
 
 // resolveConfig substitutes defaults for invalid values and resolves the origin
-// allow-list into a lookup set. A nil cfg resolves to the defaults.
+// allow-list into an [originPolicy]. A nil cfg resolves to the defaults.
 //
 // The caller's Config is copied, so mutating it afterwards cannot change a hub
 // that has already been built from it. The result is never mutated again.
@@ -101,15 +100,7 @@ func resolveConfig(cfg *Config) resolvedConfig {
 		resolved.RateLimit.RefillInterval = defaultRateLimitRefill
 	}
 
-	normalizedOrigins, allowAll := normalizeOrigins(resolved.AllowedOrigins)
-	resolved.AllowedOrigins = normalizedOrigins
-
-	origins := make(map[string]struct{}, len(normalizedOrigins))
-	for _, origin := range normalizedOrigins {
-		origins[origin] = struct{}{}
-	}
-
-	return resolvedConfig{Config: resolved, origins: origins, allowAll: allowAll}
+	return resolvedConfig{Config: resolved, origins: newOriginPolicy(resolved.AllowedOrigins)}
 }
 
 // NewConfig creates a Config instance populated with default values for all settings.
