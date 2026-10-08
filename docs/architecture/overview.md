@@ -61,8 +61,10 @@ listener the caller has already opened, for a caller that needs the address firs
 exported from the lifecycle — the hub's own `start` and `shutdown` are unexported — so the shutdown
 ordering below cannot be got wrong by a caller, including a test, which is why the integration tests
 drive the real thing rather than a copy of it. What the package exports is that service, the
-`Config` it is built from, the logger setup `main` calls, the `Message` wire type, and, through
-`Service.Hub()`, two read-only views of the hub (`ClientCount`, `IsStopped`) for tests to observe.
+`Config` it is built from, the logger setup `main` calls, the `Message` wire type, the
+`HealthResponse` body that `/` serves, and, through `Service.Hub()`, two read-only views of the hub
+(`ClientCount`, `IsStopped`) for tests to observe. `Hub` has no exported constructor: its zero value
+is unusable, so the only working one is the one `Service.Hub()` returns.
 
 **Hub** (`hub.go`) — owns the set of connected clients and the configuration they run under.
 `newHub(cfg)` resolves the configuration once and keeps it, so the origin allow-list, the message
@@ -238,12 +240,12 @@ by waiting on a channel nobody will read.
 
 ## Concurrency model
 
-| Goroutine        | Count            | Lifetime                       | Started by                |
-| ---------------- | ---------------- | ------------------------------ | ------------------------- |
-| Hub run loop     | 1                | Process lifetime               | `Hub.start`               |
-| Client read pump | 1 per connection | Until read error or shutdown   | Hub run loop, via `serve` |
-| Client write pump| 1 per connection | Until send closed or shutdown  | `wsClient.serve`          |
-| `ListenAndServe` | 1                | Process lifetime               | `Service.Run`             |
+| Goroutine         | Count            | Lifetime                      | Started by                                                                |
+| ----------------- | ---------------- | ----------------------------- | ------------------------------------------------------------------------- |
+| Hub run loop      | 1                | Process lifetime              | `Hub.start`                                                               |
+| Client read pump  | 1 per connection | Until read error or shutdown  | Hub run loop, via `serve`                                                 |
+| Client write pump | 1 per connection | Until send closed or shutdown | `wsClient.serve`                                                          |
+| HTTP serving      | 1                | Process lifetime              | `Service.Run` (`ListenAndServe`) or `Service.Serve` (`http.Server.Serve`) |
 
 Roughly two goroutines and a 256-message buffer per connection. Only the first of the two is the
 hub's to launch and to wait on; the second belongs to the client, which is why `serve` does not

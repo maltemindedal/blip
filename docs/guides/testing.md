@@ -4,7 +4,8 @@ How the suite is organized and how to run, extend, and measure it.
 
 ## Layout
 
-Tests live in two places, split by whether they need a listening socket.
+Tests live in two places, split by what they reach: the package's unexported code, or the running
+service as a client sees it.
 
 ```
 internal/server/
@@ -25,9 +26,11 @@ test/
 **Unit tests** are package-internal: `x_internal_test.go` covers `x.go` and can reach the package's
 unexported code. The hub's lifecycle and fan-out, the handlers and routes, configuration, the wire
 encoder, the rate limiter, the origin policy and the write pump's framing are pinned there, with the
-benchmarks for the hot paths. None of them needs a socket: a handler is driven through
-`httptest.NewRecorder`, and a hub through `fakeClient`, below. So is the `*http.Server` that `New`
-builds — its address, its timeouts, and its header limit are the service's own, not a caller's.
+benchmarks for the hot paths. Most of them need no socket: a handler is driven through
+`httptest.NewRecorder`, and a hub through `fakeClient`, below. The service's tests are the
+exception. They check the `*http.Server` that `New` builds — its address, its timeouts, and its
+header limit are the service's own, not a caller's — and what `Run` and `Serve` do when a listener
+fails or the context is cancelled, so some of them open a listener of their own.
 
 **Integration tests** run the real `server.Service` on an ephemeral loopback port, through
 `Service.Serve`, and dial it with a real `gorilla/websocket` client, so they exercise the actual
@@ -123,8 +126,9 @@ opened before the service is built, so its own origin is already on the allow-li
 Follow the conventions already in the suite:
 
 - Name tests `TestSubjectBehavior` — `TestWebSocketOriginValidation`, `TestHubShutdownTimeout`.
-- Put anything that needs a listening socket in `test/integration`, everything else in
-  `internal/server`, in the `_internal_test.go` file named after the file it covers.
+- Put a test that needs only the exported API, and talks to the running service the way a client
+  does, in `test/integration`. Put a test that needs unexported code in `internal/server`, in the
+  `_internal_test.go` file named after the file it covers, even when it opens a listener of its own.
 - Use table-driven subtests with `t.Run` for multiple scenarios of one behavior.
 - Cover the failure path, not just the happy one — most bugs in this codebase live in error handling
   and shutdown ordering.

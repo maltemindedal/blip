@@ -36,6 +36,10 @@ type clientConn interface {
 
 // Hub manages all WebSocket client connections and handles message broadcasting.
 //
+// A Hub is built by the [Service] that owns it and reached through
+// [Service.Hub]. Its zero value is not usable: its channels are never made, so
+// [Hub.ClientCount] on one would block forever.
+//
 // The clients map is owned exclusively by the hub's run loop: registration,
 // unregistration, broadcast fan-out, and shutdown all happen there. That single
 // ownership removes lock traffic from the broadcast path entirely, so every
