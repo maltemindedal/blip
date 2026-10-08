@@ -47,7 +47,8 @@ func TestOriginPolicyAllows(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := newOriginPolicy(tt.allowed).allows(tt.origin); got != tt.want {
+			policy, _ := newOriginPolicy(tt.allowed)
+			if got := policy.allows(tt.origin); got != tt.want {
 				t.Errorf("newOriginPolicy(%q).allows(%q) = %v, want %v", tt.allowed, tt.origin, got, tt.want)
 			}
 		})
@@ -57,7 +58,7 @@ func TestOriginPolicyAllows(t *testing.T) {
 // BenchmarkOriginCheck measures the check the upgrader runs on every handshake,
 // with the already-canonical header a browser sends.
 func BenchmarkOriginCheck(b *testing.B) {
-	policy := newOriginPolicy([]string{"http://localhost:8080", "https://example.com"})
+	policy, _ := newOriginPolicy([]string{"http://localhost:8080", "https://example.com"})
 
 	req := httptest.NewRequest(http.MethodGet, "/ws", nil)
 	req.Header.Set("Origin", "https://example.com")

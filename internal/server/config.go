@@ -100,7 +100,10 @@ func resolveConfig(cfg *Config) resolvedConfig {
 		resolved.RateLimit.RefillInterval = defaultRateLimitRefill
 	}
 
-	return resolvedConfig{Config: resolved, origins: newOriginPolicy(resolved.AllowedOrigins)}
+	origins, allowed := newOriginPolicy(resolved.AllowedOrigins)
+	resolved.AllowedOrigins = allowed
+
+	return resolvedConfig{Config: resolved, origins: origins}
 }
 
 // NewConfig creates a Config instance populated with default values for all settings.

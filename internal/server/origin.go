@@ -24,8 +24,17 @@ type originPolicy struct {
 // trimmed and normalized to lowercase scheme://host; blank entries are skipped,
 // "*" allows every origin, and anything that does not parse as an origin is
 // logged and ignored rather than aborting startup.
-func newOriginPolicy(configured []string) originPolicy {
+//
+// It also returns the origins it kept, normalized and in their configured
+// order, without "*": the allow-list as enforced, for the resolved
+// configuration to record. That list is nil when nothing was configured.
+func newOriginPolicy(configured []string) (originPolicy, []string) {
 	policy := originPolicy{origins: make(map[string]struct{}, len(configured))}
+
+	var kept []string
+	if len(configured) > 0 {
+		kept = make([]string, 0, len(configured))
+	}
 
 	for _, origin := range configured {
 		trimmed := strings.TrimSpace(origin)
@@ -45,9 +54,10 @@ func newOriginPolicy(configured []string) originPolicy {
 		}
 
 		policy.origins[normalized] = struct{}{}
+		kept = append(kept, normalized)
 	}
 
-	return policy
+	return policy, kept
 }
 
 func normalizeOrigin(origin string) (string, bool) {
