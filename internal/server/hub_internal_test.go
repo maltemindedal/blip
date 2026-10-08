@@ -76,13 +76,22 @@ func startTestHub(t *testing.T, cfg *Config) *Hub {
 	// processed everything queued before this point.
 	h.ClientCount()
 
+	shutdownAtCleanup(t, h)
+	return h
+}
+
+// shutdownAtCleanup shuts h down when the test ends, so a test that fails before
+// its own shutdown does not leave the run loop running for the rest of the test
+// binary. shutdown is idempotent, so a test that has already shut h down loses
+// nothing.
+func shutdownAtCleanup(t *testing.T, h *Hub) {
+	t.Helper()
+
 	t.Cleanup(func() {
 		if err := shutdownHub(t, h); err != nil {
 			t.Errorf(shutdownErrorMsg, err)
 		}
 	})
-
-	return h
 }
 
 const shutdownErrorMsg = "Failed to shutdown hub: %v"
@@ -285,21 +294,15 @@ func TestHubUnregisterOfAGoneClientIsANoOp(t *testing.T) {
 }
 
 // TestHubRejectsClientWorkAfterShutdown pins the shutdown race that register and
-// unregister now own: once the run loop has exited, neither may block on a
-// channel it will never read again. Both take a clientConn, which only this
-// package can name, so the test lives here.
+// unregister own: once the run loop has exited, neither may block on a channel
+// it will never read again.
 func TestHubRejectsClientWorkAfterShutdown(t *testing.T) {
 	t.Parallel()
 
-	h := newHub(nil)
-	h.start()
-	h.ClientCount()
+	h := startTestHub(t, nil)
 
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
-	defer cancel()
-
-	if err := h.shutdown(ctx); err != nil {
-		t.Fatalf("failed to shut the hub down: %v", err)
+	if err := shutdownHub(t, h); err != nil {
+		t.Fatalf(shutdownErrorMsg, err)
 	}
 
 	client := newFakeClient("shutdown-race", 0)
@@ -409,9 +412,7 @@ func TestHubHandlesConcurrentBroadcasts(t *testing.T) {
 func TestHubShutdownStopsTheEventLoop(t *testing.T) {
 	t.Parallel()
 
-	hub := newHub(nil)
-	hub.start()
-	hub.ClientCount()
+	hub := startTestHub(t, nil)
 
 	if hub.IsStopped() {
 		t.Fatal("Hub reported stopped while still running")
@@ -450,6 +451,7 @@ func TestHubShutdownRightAfterStartStopsTheHub(t *testing.T) {
 
 	for range rounds {
 		hub := newHub(nil)
+		shutdownAtCleanup(t, hub)
 		hub.start()
 
 		if err := shutdownHub(t, hub); err != nil {
@@ -469,6 +471,7 @@ func TestHubStartTwiceRunsOneLoop(t *testing.T) {
 	t.Parallel()
 
 	hub := newHub(nil)
+	shutdownAtCleanup(t, hub)
 
 	var wg sync.WaitGroup
 	for range 8 {
@@ -498,9 +501,7 @@ func TestHubStartTwiceRunsOneLoop(t *testing.T) {
 func TestHubShutdownIsIdempotent(t *testing.T) {
 	t.Parallel()
 
-	hub := newHub(nil)
-	hub.start()
-	hub.ClientCount()
+	hub := startTestHub(t, nil)
 
 	const callers = 3
 	var wg sync.WaitGroup
@@ -533,9 +534,7 @@ func TestHubShutdownIsIdempotent(t *testing.T) {
 func TestHubClientCountAfterShutdown(t *testing.T) {
 	t.Parallel()
 
-	hub := newHub(nil)
-	hub.start()
-	hub.ClientCount()
+	hub := startTestHub(t, nil)
 
 	if err := shutdownHub(t, hub); err != nil {
 		t.Fatalf(shutdownErrorMsg, err)
@@ -560,9 +559,7 @@ func TestHubClientCountAfterShutdown(t *testing.T) {
 func TestHubPublishAfterShutdownIsRejected(t *testing.T) {
 	t.Parallel()
 
-	hub := newHub(nil)
-	hub.start()
-	hub.ClientCount()
+	hub := startTestHub(t, nil)
 
 	if err := shutdownHub(t, hub); err != nil {
 		t.Fatalf(shutdownErrorMsg, err)
@@ -584,9 +581,7 @@ func TestHubPublishAfterShutdownIsRejected(t *testing.T) {
 func TestHubShutdownReturnsPromptlyWhenIdle(t *testing.T) {
 	t.Parallel()
 
-	hub := newHub(nil)
-	hub.start()
-	hub.ClientCount()
+	hub := startTestHub(t, nil)
 
 	// A budget this short is only met if shutdown returns as soon as the event
 	// loop and the pumps are done, rather than waiting out a timer.
