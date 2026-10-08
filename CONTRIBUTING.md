@@ -76,7 +76,9 @@ in `internal/server`:
 - **Functions stay small.** `client.go` and `hub.go` decompose their pumps into one-purpose helpers;
   new code should read the same way.
 - **Concurrent state is guarded** — either owned by a single goroutine (as the hub's run loop owns
-  the registry) or behind a mutex. Never leave a blocking send without a `case <-shutdown` escape.
+  the registry) or behind a mutex. Never leave a blocking send without an escape for shutdown:
+  `case <-quit` for a send to the run loop (`<-hub.stopping()` outside the hub), or `case <-done`
+  where the loop may already have exited, as `ClientCount` does.
 
 Linters enabled in `.golangci.yml`, grouped as the file groups them:
 

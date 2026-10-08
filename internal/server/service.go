@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"time"
 )
@@ -18,8 +19,9 @@ const (
 )
 
 // Service is the running server: one hub, the routes bound to it, and the HTTP
-// server that serves them. Constructing and running it are the only two things
-// a caller does, so the shutdown ordering cannot be got wrong from outside.
+// server that serves them. Constructing it and running it, with [Service.Run] or
+// [Service.Serve], are the only things a caller does, so the shutdown ordering
+// cannot be got wrong from outside.
 type Service struct {
 	hub        *Hub
 	httpServer *http.Server
@@ -31,7 +33,7 @@ type Service struct {
 // connection paths (origin checks, message size limits, rate limiting) read this
 // service's settings rather than the process's.
 func New(cfg *Config) *Service {
-	hub := NewHub(cfg)
+	hub := newHub(cfg)
 
 	return &Service{
 		hub: hub,
@@ -40,7 +42,7 @@ func New(cfg *Config) *Service {
 			// the default and rewrites a bare port into ":port", which is the
 			// form http.Server.Addr requires.
 			Addr:              hub.cfg.Port,
-			Handler:           SetupRoutesWithHub(hub),
+			Handler:           setupRoutes(hub),
 			ReadTimeout:       15 * time.Second,
 			ReadHeaderTimeout: 5 * time.Second,
 			WriteTimeout:      15 * time.Second,
@@ -57,21 +59,46 @@ func (s *Service) Hub() *Hub {
 	return s.hub
 }
 
-// Run starts the hub and serves HTTP until the listener fails or ctx is done.
-// A listener failure drains the hub, so nothing outlives the call, and is
-// returned wrapped, joined with the drain's error if that overran its budget.
-// Cancelling ctx drains the service and returns nil once it has stopped, or the
-// drain's error if a stage overran its budget.
+// Run listens on the configured port and serves there as [Service.Serve] does.
+// If it cannot listen, it returns that error before starting anything, so there
+// is nothing to drain.
 func (s *Service) Run(ctx context.Context) error {
-	s.hub.Start()
+	ln, err := net.Listen("tcp", s.httpServer.Addr)
+	if err != nil {
+		return fmt.Errorf("http server: %w", err)
+	}
+
+	// The configured address is the one logged, not ln's resolved form, so the
+	// startup line reads as it is configured: addr=:8080 rather than [::]:8080.
+	return s.serve(ctx, ln, s.httpServer.Addr)
+}
+
+// Serve starts the hub and serves HTTP on ln, which it closes before returning,
+// until ln fails or ctx is done. It exists for a caller that needs the address
+// before the service is built, such as a test listening on an ephemeral port
+// whose own origin has to be on the allow-list; [Service.Run] uses it too.
+//
+// A listener failure drains the HTTP server and the hub, so nothing outlives
+// the call, and is returned wrapped, joined with the drain's error if that
+// overran its budget. Cancelling ctx drains the service and returns nil once it
+// has stopped, or the drain's error if a stage overran its budget.
+func (s *Service) Serve(ctx context.Context, ln net.Listener) error {
+	return s.serve(ctx, ln, ln.Addr().String())
+}
+
+// serve is the lifecycle behind [Service.Serve]: start the hub, serve ln on a
+// goroutine of its own, and drain on cancellation or a listener failure. addr is
+// only logged.
+func (s *Service) serve(ctx context.Context, ln net.Listener, addr string) error {
+	s.hub.start()
 	log().Info("hub started and ready to manage WebSocket connections")
 
 	serverErrors := make(chan error, 1)
 	go func() {
-		log().Info("server listening", "addr", s.httpServer.Addr)
+		log().Info("server listening", "addr", addr)
 
-		if err := s.httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			serverErrors <- fmt.Errorf("listen and serve: %w", err)
+		if err := s.httpServer.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			serverErrors <- fmt.Errorf("serve: %w", err)
 			return
 		}
 
@@ -81,18 +108,38 @@ func (s *Service) Run(ctx context.Context) error {
 	select {
 	case err := <-serverErrors:
 		if err != nil {
-			// The hub is already running, so a listener failure must drain it
-			// rather than leave its goroutines behind.
-			hubErr := withStageDeadline(context.Background(), s.hub.Shutdown)
-			return errors.Join(fmt.Errorf("http server: %w", err), hubErr)
+			// The listener is gone, but connections the server accepted before
+			// it failed are still being served, and the hub is still running.
+			// Both are drained, in the same order as on cancellation, so
+			// nothing outlives the call.
+			return errors.Join(fmt.Errorf("http server: %w", err), s.shutdown())
 		}
 		return nil
 
 	case <-ctx.Done():
 		log().Info("shutdown signal received; draining connections")
 
-		if err := s.shutdown(); err != nil {
-			return fmt.Errorf("graceful shutdown: %w", err)
+		shutdownErr := s.shutdown()
+
+		// The serving goroutine may not have reached http.Server.Serve when
+		// the drain ran, and Shutdown cannot close a listener it has not seen.
+		// Once Shutdown has run, Serve returns ErrServerClosed as soon as it
+		// starts, closing the listener on the way out, so this wait is short;
+		// it is what keeps the listener from outliving the call.
+		//
+		// The goroutine reports nil for that close. Anything else means the
+		// listener failed on its own before the shutdown reached it, and a
+		// cancellation that won the select does not make that failure moot.
+		serveErr := <-serverErrors
+
+		if shutdownErr != nil {
+			shutdownErr = fmt.Errorf("graceful shutdown: %w", shutdownErr)
+		}
+		if serveErr != nil {
+			return errors.Join(fmt.Errorf("http server: %w", serveErr), shutdownErr)
+		}
+		if shutdownErr != nil {
+			return shutdownErr
 		}
 
 		log().Info("server stopped gracefully")
@@ -112,7 +159,7 @@ func (s *Service) shutdown() error {
 	defer cancel()
 
 	httpErr := withStageDeadline(ctx, s.stopAccepting)
-	hubErr := withStageDeadline(ctx, s.hub.Shutdown)
+	hubErr := withStageDeadline(ctx, s.hub.shutdown)
 
 	return errors.Join(httpErr, hubErr)
 }

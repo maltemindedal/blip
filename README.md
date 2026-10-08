@@ -92,7 +92,7 @@ Full index: [docs/README.md](docs/README.md).
 ```
 cmd/server/         Entry point: logger, config, signal handling
 internal/server/    Service lifecycle, hub, client pumps, handlers, config, origin checks, rate limiter
-test/               Unit and integration suites plus shared helpers
+test/               Integration suite plus shared helpers (unit tests sit beside the code)
 docs/               Documentation (see docs/README.md)
 .github/workflows/  CI pipeline
 ```
@@ -104,7 +104,7 @@ instances behind a load balancer form separate chat rooms — see
 [scaling](docs/guides/deploying-to-production.md#scaling). There is no built-in authentication;
 enforce it in front of `/ws` if your data needs it.
 
-Test coverage was 70.4% of statements as of 2026-07-24 (`make test-coverage`). Broadcast fan-out and
+Test coverage was 83.9% of statements as of 2026-10-08 (`make test-coverage`). Broadcast fan-out and
 rate limiting are allocation-free per message, and the origin check is allocation-free per
 handshake — see
 [performance](docs/architecture/overview.md#performance) for the numbers and `make bench` to

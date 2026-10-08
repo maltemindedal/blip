@@ -44,7 +44,8 @@ internal/server/
   types.go                  Message payloads exchanged over the wire
   close_errors.go           Tells ordinary connection teardown from a real fault
   message_json.go           The wire-format encoder, kept identical to encoding/json
-test/                       Unit and integration suites (see guides/testing.md)
+test/                       Integration suite and its helpers; unit tests sit beside the code
+                            as *_internal_test.go (see guides/testing.md)
 ```
 
 `internal/` means the packages cannot be imported by other modules — this is an application, not a
@@ -53,17 +54,25 @@ package comment on each file describes that file's slice of responsibility.
 
 ## Components
 
-**Service** (`service.go`) — the whole running server behind two functions. `New(cfg)` builds the
-hub, the routes bound to it, and the `http.Server` that fronts them; `Run(ctx)` starts them and
-drains them when `ctx` is cancelled. Nothing else is exported from the lifecycle, so the shutdown
-ordering below cannot be got wrong by a caller — including a test, which is why the tests drive the
-real thing rather than a copy of it.
+**Service** (`service.go`) — the whole running server behind `New` and `Run`. `New(cfg)` builds the
+hub, the routes bound to it, and the `http.Server` that fronts them; `Serve(ctx, ln)` starts them on
+a listener and drains them when `ctx` is cancelled, and `Run(ctx)` opens that listener on the
+configured port and hands it to `Serve`. `Serve` is exported for a caller that needs the address
+before the service is built. Nothing else is
+exported from the lifecycle — the hub's own `start` and `shutdown` are unexported — so the shutdown
+ordering below cannot be got wrong by a caller, including a test, which is why the integration tests
+drive the real thing rather than a copy of it. What the package exports is that service, the
+`Config` it is built from, the logger setup `main` calls, the `Message` wire type, the
+`HealthResponse` body that `/` serves, and, through `Service.Hub()`, two read-only views of the hub
+(`ClientCount`, `IsStopped`) for tests to observe. `Hub` has no exported constructor: its zero value
+is unusable, so the only working one is the one `Service.Hub()` returns, and even that one's
+`ClientCount` blocks until `Run` or `Serve` has started its run loop.
 
 **Hub** (`hub.go`) — owns the set of connected clients and the configuration they run under.
-`NewHub(cfg)` resolves the configuration once and keeps it, so the origin allow-list, the message
-size limit, and the rate limit belong to that hub rather than to the process. `Start()` launches a
-single goroutine — the hub's run loop — which selects over five channels: `register`, `unregister`,
-`broadcast`, `countReq`, and `shutdown`.
+`newHub(cfg)` resolves the configuration once and keeps it, so the origin allow-list, the message
+size limit, and the rate limit belong to that hub rather than to the process. `start()` launches a
+single goroutine — the hub's run loop — which selects over five channels: `registerReq`,
+`unregisterReq`, `broadcast`, `countReq`, and `quit`.
 
 That goroutine is the *sole* owner of the client map: registration, unregistration, fan-out, and
 shutdown all happen inside the run loop, so the map needs no lock at all. Broadcasts iterate the map
@@ -71,7 +80,7 @@ directly instead of copying it, and the slice of failed clients is scratch space
 messages, which makes the fan-out path allocation-free. The rule that keeps this sound is simple:
 every mutation of the client set must arrive through one of the hub's channels.
 
-What that map holds is not a `*Client` but `clientConn`, the hub's own four-method view of one: an
+What that map holds is not a `*wsClient` but `clientConn`, the hub's own four-method view of one: an
 inbox to deliver into, a `serve` to run, a connection to close at shutdown, and an address to log.
 The client satisfies it over a real socket; a test registers a fake with no socket at all, which is
 the only practical way to reach the drop-on-full rule below — see [Testing](../guides/testing.md).
@@ -81,11 +90,14 @@ message. Naming the seam therefore costs the broadcast path nothing: it measures
 1000 clients than dereferencing the channel out of each client did, because the channel now sits in
 the map next to the key instead of one pointer hop away in the client's own memory.
 
-Those channels are the hub's own, though — nothing outside it sends on them. What it exports is
-intent: `Register(ctx, client)`, `Unregister(client)`, and `Publish(msg)`. Each one owns the race a
-raw channel send would leave to its caller, because the run loop stops reading the moment shutdown
-is signalled: `Register` and `Publish` report `false` instead of blocking forever, and `Unregister`
-becomes a no-op. Registration additionally gives up when the request context is done, so a client
+Those channels are the hub's own, though — nothing outside it sends on them. The one signal a client
+does need, that shutdown has begun, it reads through `stopping()`, which hands out the `quit`
+channel receive-only: what `stopping()` returns cannot be closed or sent on. The `quit` field itself
+is visible to the whole package, so code outside `hub.go` leaving it alone is still a convention,
+one that going through `stopping()` makes easy to keep. What the hub offers the rest of the package is intent: `register(ctx, client)`,
+`unregister(client)`, and `publish(msg)`. Each one owns the race a raw channel send would leave to
+its caller, because the run loop stops reading the moment shutdown is signalled: `register` and
+`publish` report `false` instead of blocking forever, and `unregister` becomes a no-op. Registration additionally gives up when the request context is done, so a client
 whose HTTP request went away never joins. Handing out the channels instead would mean every caller
 re-deriving all of that.
 
@@ -97,10 +109,11 @@ which is what makes it a usable synchronization barrier in tests.
 **Client** (`client.go`) — one per connection, with two goroutines:
 
 - *read pump* — reads frames, enforces the rate limit, normalizes the payload, and hands it to
-  `Hub.Publish`. Exits on any read error and unregisters the client.
+  `Hub.publish`. Exits on any read error and unregisters the client.
 - *write pump* — selects over the client's 256-message `send` channel, a 54-second ping ticker, and
-  the hub's shutdown channel. Coalesces anything already queued into the current frame, separated by
-  newlines, so a burst costs one frame rather than one per message.
+  the hub's `stopping()` channel. Coalesces anything already queued into the current frame, separated by
+  newlines, so a burst costs one frame rather than one per message. The frame body comes from
+  `writeFrame`, a function of a writer and the queue, so that format is unit-tested without a socket.
 
 Splitting reads and writes is required by `gorilla/websocket`: at most one concurrent reader and one
 concurrent writer are allowed per connection. How many pumps that takes is the client's business, not
@@ -108,7 +121,7 @@ the hub's: the hub starts one goroutine per registered client, running `serve`, 
 pump on that goroutine, the write pump on a second, and returns only once both have exited. The hub's
 `WaitGroup` therefore has one entry per connection rather than two, and still covers both pumps.
 
-**Rate limiter** (`rate_limiter.go`) — a token bucket per connection, embedded in the `Client` by
+**Rate limiter** (`rate_limiter.go`) — a token bucket per connection, embedded in the `wsClient` by
 value. Tokens refill continuously from elapsed time rather than on a timer, so there is no background
 goroutine and no allocation per client. It carries no mutex because only that connection's read pump
 ever touches it; sharing a limiter across goroutines would be a bug.
@@ -131,20 +144,23 @@ composite literal or a direct write to `last` could still arrange a stale baseli
 seam. That door predates the seam and is unchanged by it.
 
 The instant is an argument on the seam rather than a `func() time.Time` field on the struct
-deliberately: a limiter sits by value inside every `Client` and `allow` runs once per message, so a
+deliberately: a limiter sits by value inside every `wsClient` and `allow` runs once per message, so a
 function-valued field would add an indirect call to the hot path and a word to every connection. The
 seam costs neither — `newRateLimiterAt` inlines into its wrapper, `allow` is one static call into
 `allowAt`, and the struct is unchanged.
 
-**Origin validation** (`origin.go`) — normalizes the `Origin` header to lowercase `scheme://host` and
-looks it up in a set built once when the hub is constructed. It is a method on that hub's resolved
-configuration, bound into the hub's own upgrader as `CheckOrigin`, so rejection happens before any
-connection resources are allocated. Headers that are already canonical — which is what browsers send
+**Origin validation** (`origin.go`) — an `originPolicy`, built once when the hub is constructed:
+the allow-list normalized to lowercase `scheme://host` in a lookup set, and whether it contained `*`.
+Everything about origins lives in that one type — reading the configured list, `*`, dropping invalid
+entries, and the check itself — so its rules are unit-tested over plain strings. The hub's resolved
+configuration holds it, and its `checkOrigin` is bound as `CheckOrigin` into the upgrader that the
+hub's `/ws` handler builds, so rejection happens before any connection resources are allocated. The check normalizes the
+`Origin` header the same way, but headers that are already canonical — which is what browsers send
 — match the set directly and skip URL parsing entirely. A request with no `Origin` header is always
 rejected, even when the allow-list contains `*`.
 
 **Config** (`config.go`) — parsed from the environment at startup into a `Config`, then resolved once
-by `NewHub`: defaults substituted for anything invalid, the allow-list normalized into a lookup set.
+by `newHub`: defaults substituted for anything invalid, the allow-list normalized into a lookup set.
 The result is a value the hub owns and never mutates, so readers on the connection path need neither
 a lock nor an atomic load, and two hubs in one process can be configured differently. The caller's
 `Config` is copied on the way in, so changing it afterwards cannot change a running hub. Invalid
@@ -168,7 +184,7 @@ sequenceDiagram
     A->>RA: {"content":"hi"}
     RA->>RA: rate limit check
     RA->>RA: normalize payload
-    RA->>H: BroadcastMessage{Sender: A, Payload}
+    RA->>H: broadcastMessage{Sender: A, Payload}
     H->>H: iterate clients, skip sender
     H->>WB: send channel
     WB->>B: text frame
@@ -176,7 +192,7 @@ sequenceDiagram
 
 Two consequences fall out of this design:
 
-- **The sender never receives its own message.** `BroadcastMessage` carries the sender so the hub can
+- **The sender never receives its own message.** `broadcastMessage` carries the sender so the hub can
   skip it. Clients that want a local echo must add it themselves.
 - **Payloads are normalized.** Every frame is re-encoded into exactly `{"content":...}`, so unknown
   fields are dropped, clients cannot smuggle extra data through, and a message missing `content` is
@@ -198,36 +214,47 @@ its messages being queued indefinitely.
 `Run`. It holds no lifecycle logic of its own, so the ordering below is reachable from a test.
 
 **Startup** (`New`, then `Run`): `New` hands the config to the hub, which resolves and keeps it,
-builds the mux, and constructs the `http.Server` with 15s read/write and 60s idle timeouts. `Run` starts the hub
-goroutine, calls `ListenAndServe` in a goroutine, and blocks on either a listener error or the
-context being done. A listener error drains the hub before `Run` returns it, so a failed listen
-leaves no goroutines behind.
+builds the mux, and constructs the `http.Server` with 15s read/write and 60s idle timeouts. `Run`
+opens a listener on the configured port first; if it cannot, it returns that error before starting
+anything. It then hands the listener to `Serve`, which starts the hub goroutine, calls
+`http.Server.Serve` in a goroutine, and blocks on either a listener error or the context being done.
+A listener error runs the same two-stage drain as cancellation before `Serve` returns it, so neither
+the hub nor a connection the server had already accepted outlives the call. Calling `Serve`
+directly is how the integration tests run a real service on an ephemeral port whose origin they
+know before the service is built.
 
-**Shutdown**, on cancellation, in strict order with a 30-second overall cap. `Run` builds one
+**Shutdown**, on cancellation, in strict order with a 30-second overall cap. `Serve` builds one
 `context.Context` carrying that cap and derives a 15-second child for each stage, so a stage that
 overruns cannot borrow the other's budget:
 
 1. `http.Server.Shutdown` (15s context) — stops accepting connections and drains in-flight requests.
    Upgraded WebSocket connections are hijacked, so this stage does not wait on them.
-2. `Hub.Shutdown` (15s context) — closes the `shutdown` channel, which stops the run loop, closes
+2. `Hub.shutdown` (15s context) — closes the `quit` channel, which stops the run loop, closes
    every client connection, and waits on the `WaitGroup` for all pumps to exit. Both of those waits
    share the one 15-second deadline.
 
 The two errors are joined rather than short-circuited, so a hub that overran is still reported when
-the HTTP stage failed too.
+the HTTP stage failed too. `Serve` then waits for the goroutine that called `http.Server.Serve` to
+return: when cancellation comes before that goroutine has started serving, `http.Server.Shutdown`
+has no listener to close, and the listener would otherwise be closed only after `Serve` had
+returned. If that goroutine reports that the listener had already failed on its own, `Serve` returns
+that failure rather than letting the cancellation hide it.
 
-The `shutdown` channel appears in every blocking select in the codebase — inside `Register`,
-`Unregister`, and `Publish`, and in the write pump's own event loop — so nothing can block shutdown
-by waiting on a channel nobody will read.
+Every send to the run loop — in `register`, `unregister`, and `publish` — and the write pump's own
+event loop also select on the `quit` channel, so none of them can block shutdown by waiting on a run
+loop that has stopped reading. The other blocking waits are bounded in other ways: `ClientCount`
+selects on `done`, which closes when the run loop exits; each shutdown stage waits under its own
+deadline; `Serve`'s last receive from its serving goroutine completes once `http.Server.Shutdown`
+has run; and `writeFrame` receives only messages it has already counted as buffered.
 
 ## Concurrency model
 
-| Goroutine        | Count            | Lifetime                       | Started by                |
-| ---------------- | ---------------- | ------------------------------ | ------------------------- |
-| Hub run loop     | 1                | Process lifetime               | `Hub.Start`               |
-| Client read pump | 1 per connection | Until read error or shutdown   | Hub run loop, via `serve` |
-| Client write pump| 1 per connection | Until send closed or shutdown  | `Client.serve`            |
-| `ListenAndServe` | 1                | Process lifetime               | `Service.Run`             |
+| Goroutine         | Count            | Lifetime                      | Started by                                 |
+| ----------------- | ---------------- | ----------------------------- | ------------------------------------------ |
+| Hub run loop      | 1                | Process lifetime              | `Hub.start`                                |
+| Client read pump  | 1 per connection | Until read error or shutdown  | Hub run loop, via `serve`                  |
+| Client write pump | 1 per connection | Until send closed or shutdown | `wsClient.serve`                           |
+| HTTP serving      | 1                | Process lifetime              | `Service.Serve`, which `Service.Run` calls |
 
 Roughly two goroutines and a 256-message buffer per connection. Only the first of the two is the
 hub's to launch and to wait on; the second belongs to the client, which is why `serve` does not

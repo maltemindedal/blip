@@ -1,26 +1,62 @@
-// Package unit contains unit tests for individual components of the Blip server.
-//
-// These tests focus on testing specific functions and methods in isolation,
-// using mocks and stubs where necessary to avoid dependencies on external systems.
-// Unit tests ensure that each component behaves correctly under various conditions.
-package unit
+package server
 
 import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
-
-	"github.com/maltemindedal/blip/internal/server"
 )
+
+// TestHTTPMethodsUnit tests various HTTP methods on the health endpoint.
+// It verifies that the handler responds correctly to different HTTP methods
+// including GET, POST, PUT, DELETE, PATCH, HEAD, and OPTIONS: status 200 and the
+// HealthResponse body for each.
+func TestHTTPMethodsUnit(t *testing.T) {
+	t.Parallel()
+
+	handler := http.HandlerFunc(healthHandler)
+
+	methods := []string{"GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"}
+
+	for _, method := range methods {
+		t.Run("Test_"+method+"_method", func(t *testing.T) {
+			testHTTPMethod(t, handler, method)
+		})
+	}
+}
+
+// testHTTPMethod tests a single HTTP method against the handler
+func testHTTPMethod(t *testing.T, handler http.HandlerFunc, method string) {
+	t.Helper()
+
+	req, err := http.NewRequest(method, "/", http.NoBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	if status := rr.Code; status != http.StatusOK {
+		t.Errorf("handler returned wrong status code for %s: got %v want %v",
+			method, status, http.StatusOK)
+	}
+
+	// healthHandler answers every method alike, HEAD included: it writes the
+	// body, and the recorder keeps it. A real server would drop that body for
+	// HEAD on the wire, which this test does not reach.
+	if rr.Body.String() != HealthResponse {
+		t.Errorf("handler returned unexpected body for %s: got %v want %v",
+			method, rr.Body.String(), HealthResponse)
+	}
+}
 
 const (
 	errMethodNotAllowed = "Method not allowed. WebSocket endpoint only accepts GET requests."
 )
 
 // serveWebSocket drives req through the application routes bound to a hub of
-// this test's own. The upgrade handler is unexported — the service owns it — so
-// the mux is how these tests reach it.
+// this test's own, the way a request reaches the upgrade handler in production.
 func serveWebSocket(t *testing.T, req *http.Request) *httptest.ResponseRecorder {
 	t.Helper()
 
@@ -119,26 +155,45 @@ func TestWebSocketHandlerContentType(t *testing.T) {
 	}
 }
 
-// TestWebSocketUpgraderConfiguration tests that the upgrader is properly configured.
-// It verifies that requests with proper WebSocket headers are handled appropriately,
-// either succeeding with a protocol switch or failing with an appropriate error.
-func TestWebSocketUpgraderConfiguration(t *testing.T) {
+// TestNewUpgraderAppliesTheHubsSettings pins the upgrader each hub's /ws handler
+// builds, as docs/reference/configuration.md documents it: 1024-byte read and
+// write buffers, write buffers drawn from the pool every connection shares, and
+// CheckOrigin bound to the hub's origin policy. A nil CheckOrigin would not fail
+// closed: gorilla/websocket would fall back to checkSameOrigin, which accepts a
+// handshake that carries no Origin header at all.
+//
+// It does not drive a handshake; TestHubsCarryTheirOwnOriginPolicy and the
+// integration suite do.
+func TestNewUpgraderAppliesTheHubsSettings(t *testing.T) {
 	t.Parallel()
 
-	// Create a GET request with proper WebSocket headers
-	req := httptest.NewRequest(http.MethodGet, "/ws", nil)
-	req.Header.Set("Connection", "Upgrade")
-	req.Header.Set("Upgrade", "websocket")
-	req.Header.Set("Sec-WebSocket-Version", "13")
-	req.Header.Set("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+	policy, _ := newOriginPolicy([]string{"https://chat.example.com"})
+	upgrader := newUpgrader(policy)
 
-	w := serveWebSocket(t, req)
+	if upgrader.ReadBufferSize != 1024 || upgrader.WriteBufferSize != 1024 {
+		t.Errorf("buffers are %d bytes to read and %d to write, want 1024 each",
+			upgrader.ReadBufferSize, upgrader.WriteBufferSize)
+	}
+	if upgrader.WriteBufferPool != writeBufferPool {
+		t.Error("upgrader does not draw write buffers from the shared pool")
+	}
+	if upgrader.CheckOrigin == nil {
+		t.Fatal("upgrader has no CheckOrigin, so gorilla/websocket would apply its own same-host check")
+	}
 
-	resp := w.Result()
-	defer func() { _ = resp.Body.Close() }()
+	for origin, want := range map[string]bool{
+		"https://chat.example.com": true,
+		"https://evil.example":     false,
+		"":                         false,
+	} {
+		req := httptest.NewRequest(http.MethodGet, "/ws", nil)
+		if origin != "" {
+			req.Header.Set("Origin", origin)
+		}
 
-	if resp.StatusCode != http.StatusSwitchingProtocols && resp.StatusCode < 400 {
-		t.Errorf("Expected either status 101 or an error status (>=400), got %d", resp.StatusCode)
+		if got := upgrader.CheckOrigin(req); got != want {
+			t.Errorf("CheckOrigin with Origin %q = %v, want %v", origin, got, want)
+		}
 	}
 }
 
@@ -171,10 +226,10 @@ func TestWebSocketHandlerWithValidHeaders(t *testing.T) {
 func routesAllowing(t *testing.T, origin string) *http.ServeMux {
 	t.Helper()
 
-	cfg := server.NewConfig()
+	cfg := NewConfig()
 	cfg.AllowedOrigins = []string{origin}
 
-	return server.SetupRoutesWithHub(startHub(t, cfg))
+	return setupRoutes(startTestHub(t, cfg))
 }
 
 // upgradeStatus drives a WebSocket handshake from origin through routes and
@@ -236,24 +291,5 @@ func TestHubsCarryTheirOwnOriginPolicy(t *testing.T) {
 					tt.blocked, tt.origin, status)
 			}
 		})
-	}
-}
-
-// TestNewServiceBuildsAServerWithAHub replaces the old StartHub smoke test: the
-// startup path is now server.New, which must assemble a service around a hub
-// without panicking. Running it is covered in test/integration.
-func TestNewServiceBuildsAServerWithAHub(t *testing.T) {
-	t.Parallel()
-
-	defer func() {
-		if r := recover(); r != nil {
-			t.Errorf("server.New panicked: %v", r)
-		}
-	}()
-
-	svc := server.New(server.NewConfig())
-
-	if svc.Hub() == nil {
-		t.Fatal("server.New returned a service without a hub")
 	}
 }

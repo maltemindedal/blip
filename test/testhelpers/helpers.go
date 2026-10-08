@@ -1,14 +1,13 @@
 // Package testhelpers provides common utilities and helper functions for testing the Blip server.
 //
-// This package contains reusable test utilities that are shared across unit and integration tests.
-// It provides functions for creating test servers, dialing WebSocket connections, waiting on
-// conditions, and asserting response properties to reduce code duplication in test files.
+// This package contains reusable test utilities for the integration tests. It provides
+// functions for dialing WebSocket connections, waiting on conditions, and asserting response
+// properties to reduce code duplication in test files.
 package testhelpers
 
 import (
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -17,22 +16,6 @@ import (
 
 // pollInterval is how often WaitFor re-evaluates its condition.
 const pollInterval = 5 * time.Millisecond
-
-// CreateTestServer creates a test HTTP server whose handler is built from the
-// server's own base URL — a hub that has to allow its own origin, for instance.
-// The listener is opened before build is called, so the URL is already known by
-// then. It returns a running httptest.Server that is closed when the test ends.
-func CreateTestServer(t *testing.T, build func(baseURL string) http.Handler) *httptest.Server {
-	t.Helper()
-
-	server := httptest.NewUnstartedServer(nil)
-	t.Cleanup(server.Close)
-
-	server.Config.Handler = build("http://" + server.Listener.Addr().String())
-	server.Start()
-
-	return server
-}
 
 // WaitFor polls cond until it reports true, failing the test if timeout elapses
 // first. Use it instead of sleeping for a duration that "should be enough".
@@ -171,14 +154,6 @@ func Dial(t *testing.T, wsURL, origin string) *websocket.Conn {
 	t.Cleanup(func() { _ = conn.Close() })
 
 	return conn
-}
-
-// DialPair opens the sender/receiver pair that message-delivery tests need,
-// both from origin. Both connections are closed when the test ends.
-func DialPair(t *testing.T, wsURL, origin string) (sender, receiver *websocket.Conn) {
-	t.Helper()
-
-	return Dial(t, wsURL, origin), Dial(t, wsURL, origin)
 }
 
 // SendMessage sends a JSON message over the WebSocket connection.

@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"math"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -219,6 +220,60 @@ func TestNewConfigFromEnvWarnsOnInvalidValues(t *testing.T) {
 				if !strings.Contains(out, want) {
 					t.Errorf("Expected %q in the log, got %q", want, out)
 				}
+			}
+		})
+	}
+}
+
+// TestNewConfig tests the configuration creation function.
+// It verifies that NewConfig returns a properly initialized Config
+// struct with the expected default values.
+func TestNewConfig(t *testing.T) {
+	t.Parallel()
+
+	config := NewConfig()
+
+	if config == nil {
+		t.Fatal("NewConfig returned nil")
+	}
+
+	expectedPort := ":8080"
+	if config.Port != expectedPort {
+		t.Errorf("Expected default port %s, got %s", expectedPort, config.Port)
+	}
+}
+
+// TestResolveConfigRecordsTheEffectiveAllowList pins that the resolved
+// configuration's AllowedOrigins is the allow-list the hub enforces: entries
+// trimmed and lowercased, blank entries and entries without a scheme dropped,
+// and "*" kept as itself, so a list that allows everything does not read as one
+// that allows nothing. Nothing in production reads the field today; this keeps a
+// future reader, such as a startup log of the allow-list, from reporting
+// something other than what the policy does.
+//
+// It does not check the policy's decisions; TestOriginPolicyAllows does.
+func TestResolveConfigRecordsTheEffectiveAllowList(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		configured []string
+		want       []string
+	}{
+		{
+			"entries normalized and invalid ones dropped",
+			[]string{"  HTTPS://Chat.Example.com  ", "*", "example.com", ""},
+			[]string{"https://chat.example.com", "*"},
+		},
+		{"star alone", []string{" * "}, []string{"*"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resolved := resolveConfig(&Config{AllowedOrigins: tt.configured})
+
+			if !slices.Equal(resolved.AllowedOrigins, tt.want) {
+				t.Errorf("resolved AllowedOrigins = %q, want %q", resolved.AllowedOrigins, tt.want)
 			}
 		})
 	}

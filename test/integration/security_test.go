@@ -68,7 +68,7 @@ func newOriginTestServer(t *testing.T, origins ...string) string {
 		cfg.AllowedOrigins = origins
 	})
 
-	return buildWebSocketURL(t, testServer.URL)
+	return testServer.wsURL()
 }
 
 // Helper function to test missing origin header
@@ -252,7 +252,7 @@ func newSizeLimitedServer(t *testing.T, limit int64) (hub *server.Hub, wsURL, or
 		cfg.MaxMessageSize = limit
 	})
 
-	return hub, buildWebSocketURL(t, testServer.URL), testServer.URL
+	return hub, testServer.wsURL(), testServer.URL()
 }
 
 // Helper function to test message exactly at size limit
@@ -453,7 +453,7 @@ func testInvalidOriginWithOversizedMessage(t *testing.T) {
 		cfg.AllowedOrigins = []string{"http://allowed.com"}
 		cfg.MaxMessageSize = 64
 	})
-	wsURL := buildWebSocketURL(t, testServer.URL)
+	wsURL := testServer.wsURL()
 
 	header := http.Header{}
 	header.Set("Origin", "http://blocked.com")
@@ -473,7 +473,7 @@ func testValidOriginWithSizeAndRateLimits(t *testing.T) {
 		}
 	})
 
-	sender, receiver := dialPair(t, hub, buildWebSocketURL(t, testServer.URL), testServer.URL)
+	sender, receiver := dialPair(t, hub, testServer.wsURL(), testServer.URL())
 
 	// Send messages up to rate limit
 	for i := range burst {

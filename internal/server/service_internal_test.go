@@ -4,12 +4,15 @@
 package server
 
 import (
+	"bufio"
 	"context"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -146,10 +149,15 @@ func TestNewListensOnTheResolvedPort(t *testing.T) {
 	}
 }
 
-// TestRunDrainsTheHubWhenTheListenerFails pins that a listener failure does not
-// leave the hub's goroutines running behind it, and that the listen error stays
-// reachable through the error Run returns.
-func TestRunDrainsTheHubWhenTheListenerFails(t *testing.T) {
+// TestRunStartsNothingWhenItCannotListen pins that Run opens its listener before
+// starting anything: on a port it cannot bind, it returns the listen error with
+// the hub never started, so no goroutine is left running behind it, and the
+// error stays reachable through the one Run returns.
+//
+// A listener that fails while serving is a different path, through Serve's
+// drain; TestServeDrainsTheHubWhenTheListenerFails and
+// TestServeClosesOpenConnectionsWhenTheListenerFails cover it.
+func TestRunStartsNothingWhenItCannotListen(t *testing.T) {
 	t.Parallel()
 
 	occupied, err := net.Listen("tcp", "127.0.0.1:0")
@@ -172,13 +180,209 @@ func TestRunDrainsTheHubWhenTheListenerFails(t *testing.T) {
 	if runErr == nil {
 		t.Fatal("Expected Run to fail on an occupied port")
 	}
-	if !strings.HasPrefix(runErr.Error(), "http server: listen and serve: ") {
+	if !strings.HasPrefix(runErr.Error(), "http server: listen tcp ") {
 		t.Errorf("Unexpected error text %q", runErr)
 	}
 	if _, ok := errors.AsType[*net.OpError](runErr); !ok {
 		t.Errorf("Expected the listen error to stay reachable, got %v", runErr)
 	}
+	if svc.Hub().started.Load() {
+		t.Error("Run started the hub although it could not listen")
+	}
+}
+
+// TestServeDrainsTheHubWhenTheListenerFails pins that Serve runs Run's
+// lifecycle rather than a copy of it: a listener that fails — here, one already
+// closed — drains the hub Serve started instead of leaving it running, and the
+// accept error stays reachable through the error Serve returns.
+//
+// It covers a listener that fails at once. It does not cover the cancellation
+// path, which TestServeClosesItsListenerBeforeReturning and the integration
+// suite run, nor a drain that overruns its budget.
+func TestServeDrainsTheHubWhenTheListenerFails(t *testing.T) {
+	t.Parallel()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Failed to listen: %v", err)
+	}
+	_ = ln.Close()
+
+	svc := New(nil)
+
+	// A deadline, so a regression that keeps serving fails here instead of
+	// blocking until the test binary times out.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	serveErr := svc.Serve(ctx, ln)
+
+	if serveErr == nil {
+		t.Fatal("Expected Serve to fail on a closed listener")
+	}
+	if !strings.HasPrefix(serveErr.Error(), "http server: serve: ") {
+		t.Errorf("Unexpected error text %q", serveErr)
+	}
+	if !errors.Is(serveErr, net.ErrClosed) {
+		t.Errorf("Expected the accept error to stay reachable, got %v", serveErr)
+	}
 	if !svc.Hub().IsStopped() {
 		t.Error("Expected the hub to be stopped after the listener failed")
+	}
+}
+
+// closeRecordingListener records whether anything has closed it, so a test can
+// check that a listener is closed at a given moment rather than eventually.
+type closeRecordingListener struct {
+	net.Listener
+	closed atomic.Bool
+}
+
+func (l *closeRecordingListener) Close() error {
+	l.closed.Store(true)
+	return l.Listener.Close()
+}
+
+// TestServeClosesItsListenerBeforeReturning pins the promise in Serve's doc
+// comment: ln is closed by the time Serve returns. The case that broke it is a
+// context already cancelled when Serve starts: the drain can then finish before
+// the serving goroutine has reached http.Server.Serve, so Shutdown has no
+// listener to close, and the goroutine closes it only after Serve has returned.
+// That goroutine is scheduled at random, so the test runs the case many times.
+//
+// Run opens its listener and hands it to Serve, so this covers Run's listener
+// too, though not by calling Run: the listener Run opens is its own, where a
+// test cannot record its Close.
+func TestServeClosesItsListenerBeforeReturning(t *testing.T) {
+	t.Parallel()
+
+	const rounds = 200
+
+	for range rounds {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("Failed to listen: %v", err)
+		}
+		t.Cleanup(func() { _ = ln.Close() })
+		rec := &closeRecordingListener{Listener: ln}
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		if err := New(nil).Serve(ctx, rec); err != nil {
+			t.Fatalf("Serve returned %v after a cancelled context, want nil", err)
+		}
+		if !rec.closed.Load() {
+			t.Fatal("Serve returned with its listener still open")
+		}
+	}
+}
+
+// TestServeClosesOpenConnectionsWhenTheListenerFails pins that a listener
+// failure drains the HTTP server as well as the hub: a keep-alive connection
+// accepted before the failure must not still be served once Serve has returned.
+// The listener fails by being closed from outside, which http.Server reports as
+// an accept error rather than as its own shutdown.
+//
+// It covers an idle connection, which the drain closes at once. It does not
+// cover one with a request in flight, which the drain waits for, within its
+// budget.
+func TestServeClosesOpenConnectionsWhenTheListenerFails(t *testing.T) {
+	t.Parallel()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Failed to listen: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	served := make(chan error, 1)
+	go func() { served <- New(nil).Serve(ctx, ln) }()
+
+	conn, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatalf("Failed to dial: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	reader := bufio.NewReader(conn)
+	get := func() (int, error) {
+		if _, err := conn.Write([]byte("GET / HTTP/1.1\r\nHost: blip.test\r\n\r\n")); err != nil {
+			return 0, err
+		}
+		resp, err := http.ReadResponse(reader, nil)
+		if err != nil {
+			return 0, err
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+		return resp.StatusCode, nil
+	}
+
+	if status, err := get(); err != nil || status != http.StatusOK {
+		t.Fatalf("First request got status %d, error %v; want 200", status, err)
+	}
+
+	_ = ln.Close()
+
+	select {
+	case err := <-served:
+		if err == nil {
+			t.Fatal("Serve returned nil after its listener failed")
+		}
+	case <-ctx.Done():
+		t.Fatal("Serve did not return after its listener failed")
+	}
+
+	if err := conn.SetDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatalf("Failed to set a deadline: %v", err)
+	}
+	if status, err := get(); err == nil {
+		t.Errorf("A connection accepted before the failure got status %d after Serve returned", status)
+	}
+}
+
+// cancellingListener fails every Accept with err after calling cancel: a
+// listener that breaks at the moment a shutdown is requested.
+type cancellingListener struct {
+	net.Listener
+	cancel context.CancelFunc
+	err    error
+}
+
+func (l *cancellingListener) Accept() (net.Conn, error) {
+	l.cancel()
+	return nil, l.err
+}
+
+// TestServeReportsAListenerFailureThatRacesCancellation pins that a listener
+// failure is reported even when a cancellation arrives with it. The listener
+// cancels the context inside Accept and then fails, so run's select wakes on
+// the cancellation and takes the shutdown path, and the failure reaches run
+// only through the serving goroutine it waits for after the drain.
+//
+// It does not cover a failure that comes after the shutdown has reached the
+// http.Server: Serve then reports the server's own close, which run rightly
+// treats as no failure.
+func TestServeReportsAListenerFailureThatRacesCancellation(t *testing.T) {
+	t.Parallel()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Failed to listen: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+
+	errBroken := errors.New("listener broken")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	serveErr := New(nil).Serve(ctx, &cancellingListener{Listener: ln, cancel: cancel, err: errBroken})
+
+	if !errors.Is(serveErr, errBroken) {
+		t.Errorf("Serve returned %v, want the listener's error", serveErr)
 	}
 }

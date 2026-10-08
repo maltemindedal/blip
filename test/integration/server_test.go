@@ -16,7 +16,7 @@ func TestHealthEndpointIntegration(t *testing.T) {
 
 	testServer, _ := newTestServer(t)
 
-	resp := testhelpers.MakeRequest(t, http.MethodGet, testServer.URL+"/")
+	resp := testhelpers.MakeRequest(t, http.MethodGet, testServer.URL()+"/")
 
 	testhelpers.AssertStatusCode(t, resp, http.StatusOK)
 	testhelpers.AssertContentType(t, resp, "text/plain")
@@ -31,7 +31,7 @@ func TestUnmatchedPathsServeHealth(t *testing.T) {
 
 	testServer, _ := newTestServer(t)
 
-	resp := testhelpers.MakeRequest(t, http.MethodGet, testServer.URL+"/nonexistent")
+	resp := testhelpers.MakeRequest(t, http.MethodGet, testServer.URL()+"/nonexistent")
 
 	testhelpers.AssertStatusCode(t, resp, http.StatusOK)
 	testhelpers.AssertBody(t, resp, server.HealthResponse)
@@ -49,7 +49,7 @@ func TestFullServerIntegration(t *testing.T) {
 
 	svc := startService(t, ":18086")
 
-	resp := testhelpers.MakeRequest(t, http.MethodGet, svc.baseURL()+"/")
+	resp := testhelpers.MakeRequest(t, http.MethodGet, svc.URL()+"/")
 	testhelpers.AssertStatusCode(t, resp, http.StatusOK)
 	testhelpers.AssertContentType(t, resp, "text/plain")
 	testhelpers.AssertBody(t, resp, server.HealthResponse)

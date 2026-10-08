@@ -3,10 +3,9 @@ package server
 import (
 	"context"
 	"log/slog"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 )
@@ -15,14 +14,6 @@ import (
 func TestMain(m *testing.M) {
 	SetLogger(slog.New(slog.DiscardHandler))
 	os.Exit(m.Run())
-}
-
-func newOriginRequest(tb testing.TB, origin string) *http.Request {
-	tb.Helper()
-
-	req := httptest.NewRequest(http.MethodGet, "/ws", nil)
-	req.Header.Set("Origin", origin)
-	return req
 }
 
 // fakeClient is the test-side [clientConn]: an inbox and an address, with no
@@ -66,28 +57,53 @@ func drain(f *fakeClient) (got [][]byte, closed bool) {
 	}
 }
 
-// startTestHub runs a hub's event loop and shuts it down when the test ends. It
-// returns once the loop is provably serving requests, so no caller has to sleep
-// before using the hub.
-func startTestHub(t *testing.T) *Hub {
+// hubShutdownBudget is the deadline every hub shutdown in these tests gets
+// unless it is deliberately testing a short one. It is generous because a
+// failing shutdown should report a real error, not a race against a slow
+// machine.
+const hubShutdownBudget = 5 * time.Second
+
+// startTestHub runs a hub's event loop under cfg and shuts it down when the test
+// ends. It returns once the loop is provably serving requests, so no caller has
+// to sleep before using the hub. A nil cfg gives the hub the defaults.
+func startTestHub(t *testing.T, cfg *Config) *Hub {
 	t.Helper()
 
-	h := NewHub(nil)
-	h.Start()
+	h := newHub(cfg)
+	h.start()
 
-	// ClientCount is answered by the run loop, so a reply proves it is up.
+	// ClientCount is answered by the run loop, so a reply proves it is up and has
+	// processed everything queued before this point.
 	h.ClientCount()
 
-	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
+	shutdownAtCleanup(t, h)
+	return h
+}
 
-		if err := h.Shutdown(ctx); err != nil {
-			t.Errorf("failed to shut the hub down: %v", err)
+// shutdownAtCleanup shuts h down when the test ends, so a test that fails before
+// its own shutdown does not leave the run loop running for the rest of the test
+// binary. shutdown is idempotent, so a test that has already shut h down loses
+// nothing.
+func shutdownAtCleanup(t *testing.T, h *Hub) {
+	t.Helper()
+
+	t.Cleanup(func() {
+		if err := shutdownHub(t, h); err != nil {
+			t.Errorf(shutdownErrorMsg, err)
 		}
 	})
+}
 
-	return h
+const shutdownErrorMsg = "Failed to shutdown hub: %v"
+
+// shutdownHub shuts a hub down within hubShutdownBudget.
+func shutdownHub(t *testing.T, h *Hub) error {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(context.Background(), hubShutdownBudget)
+	defer cancel()
+
+	return h.shutdown(ctx)
 }
 
 // registerFake registers a fake client with an inbox buffer slots deep.
@@ -95,7 +111,7 @@ func registerFake(t *testing.T, h *Hub, addr string, buffer int) *fakeClient {
 	t.Helper()
 
 	c := newFakeClient(addr, buffer)
-	if !h.Register(t.Context(), c) {
+	if !h.register(t.Context(), c) {
 		t.Fatalf("hub refused to register %s", addr)
 	}
 
@@ -110,7 +126,7 @@ func registerFake(t *testing.T, h *Hub, addr string, buffer int) *fakeClient {
 func newBenchHub(tb testing.TB, n int) (*Hub, []*fakeClient) {
 	tb.Helper()
 
-	h := NewHub(nil)
+	h := newHub(nil)
 	clients := make([]*fakeClient, n)
 
 	for i := range clients {
@@ -125,7 +141,7 @@ func BenchmarkHubBroadcast(b *testing.B) {
 	for _, n := range []int{10, 100, 1000} {
 		b.Run(strconv.Itoa(n)+"clients", func(b *testing.B) {
 			h, clients := newBenchHub(b, n)
-			msg := BroadcastMessage{
+			msg := broadcastMessage{
 				Sender:  clients[0],
 				Payload: []byte(`{"content":"hello everyone"}`),
 			}
@@ -158,12 +174,12 @@ func BenchmarkHubBroadcast(b *testing.B) {
 func TestHubDropsClientWithAFullInbox(t *testing.T) {
 	t.Parallel()
 
-	h := startTestHub(t)
+	h := startTestHub(t, nil)
 	slow := registerFake(t, h, "slow", 1)
 	fast := registerFake(t, h, "fast", sendBufferSz)
 
 	for _, content := range []string{"one", "two"} {
-		if !h.Publish(BroadcastMessage{Payload: []byte(`{"content":"` + content + `"}`)}) {
+		if !h.publish(broadcastMessage{Payload: []byte(`{"content":"` + content + `"}`)}) {
 			t.Fatalf("hub refused the %q broadcast", content)
 		}
 	}
@@ -190,15 +206,15 @@ func TestHubDropsClientWithAFullInbox(t *testing.T) {
 }
 
 // TestHubBroadcastSkipsTheSender pins that a client never receives its own
-// message, which is the reason BroadcastMessage carries a sender at all.
+// message, which is the reason broadcastMessage carries a sender at all.
 func TestHubBroadcastSkipsTheSender(t *testing.T) {
 	t.Parallel()
 
-	h := startTestHub(t)
+	h := startTestHub(t, nil)
 	sender := registerFake(t, h, "sender", sendBufferSz)
 	other := registerFake(t, h, "other", sendBufferSz)
 
-	if !h.Publish(BroadcastMessage{Sender: sender, Payload: []byte(`{"content":"hi"}`)}) {
+	if !h.publish(broadcastMessage{Sender: sender, Payload: []byte(`{"content":"hi"}`)}) {
 		t.Fatal("hub refused the broadcast")
 	}
 	h.ClientCount()
@@ -216,7 +232,7 @@ func TestHubBroadcastSkipsTheSender(t *testing.T) {
 func TestHubBroadcastReachesEveryOtherClient(t *testing.T) {
 	t.Parallel()
 
-	h := startTestHub(t)
+	h := startTestHub(t, nil)
 
 	clients := make([]*fakeClient, 6)
 	for i := range clients {
@@ -224,7 +240,7 @@ func TestHubBroadcastReachesEveryOtherClient(t *testing.T) {
 	}
 
 	payload := []byte(`{"content":"everyone"}`)
-	if !h.Publish(BroadcastMessage{Sender: clients[0], Payload: payload}) {
+	if !h.publish(broadcastMessage{Sender: clients[0], Payload: payload}) {
 		t.Fatal("hub refused the broadcast")
 	}
 
@@ -252,14 +268,14 @@ func TestHubBroadcastReachesEveryOtherClient(t *testing.T) {
 func TestHubUnregisterOfAGoneClientIsANoOp(t *testing.T) {
 	t.Parallel()
 
-	h := startTestHub(t)
+	h := startTestHub(t, nil)
 	stays := registerFake(t, h, "stays", sendBufferSz)
 	leaves := registerFake(t, h, "leaves", sendBufferSz)
 	stranger := newFakeClient("stranger", sendBufferSz)
 
-	h.Unregister(stranger)
-	h.Unregister(leaves)
-	h.Unregister(leaves)
+	h.unregister(stranger)
+	h.unregister(leaves)
+	h.unregister(leaves)
 
 	if count := h.ClientCount(); count != 1 {
 		t.Fatalf("expected 1 client to remain, got %d", count)
@@ -277,249 +293,302 @@ func TestHubUnregisterOfAGoneClientIsANoOp(t *testing.T) {
 	}
 }
 
-// TestHubRejectsClientWorkAfterShutdown pins the shutdown race that Register and
-// Unregister now own: once the run loop has exited, neither may block on a
-// channel it will never read again. Both take a clientConn, which only this
-// package can name, so the test lives here.
+// TestHubRejectsClientWorkAfterShutdown pins the shutdown race that register and
+// unregister own: once the run loop has exited, neither may block on a channel
+// it will never read again.
 func TestHubRejectsClientWorkAfterShutdown(t *testing.T) {
 	t.Parallel()
 
-	h := NewHub(nil)
-	h.Start()
-	h.ClientCount()
+	h := startTestHub(t, nil)
 
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
-	defer cancel()
-
-	if err := h.Shutdown(ctx); err != nil {
-		t.Fatalf("failed to shut the hub down: %v", err)
+	if err := shutdownHub(t, h); err != nil {
+		t.Fatalf(shutdownErrorMsg, err)
 	}
 
 	client := newFakeClient("shutdown-race", 0)
 
 	registered := make(chan bool, 1)
-	go func() { registered <- h.Register(t.Context(), client) }()
+	go func() { registered <- h.register(t.Context(), client) }()
 
 	select {
 	case accepted := <-registered:
 		if accepted {
-			t.Error("Register accepted a client on a stopped hub")
+			t.Error("register accepted a client on a stopped hub")
 		}
 	case <-time.After(time.Second):
-		t.Fatal("Register blocked on a stopped hub")
+		t.Fatal("register blocked on a stopped hub")
 	}
 
 	unregistered := make(chan struct{})
 	go func() {
-		h.Unregister(client)
+		h.unregister(client)
 		close(unregistered)
 	}()
 
 	select {
 	case <-unregistered:
 	case <-time.After(time.Second):
-		t.Fatal("Unregister blocked on a stopped hub")
+		t.Fatal("unregister blocked on a stopped hub")
 	}
 }
 
-// rateLimiterEpoch is an arbitrary fixed instant. Every refill test below goes
-// through the allowAt seam so it can advance the clock by hand and pin refill
-// by arithmetic instead of by sleeping.
-var rateLimiterEpoch = time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+// publishAsync calls publish on a goroutine of its own so a caller can tell a
+// rejected message from one that blocked: publish returns on its own, but only
+// a select with a deadline proves it did.
+func publishAsync(hub *Hub, content string) <-chan bool {
+	accepted := make(chan bool, 1)
+	go func() {
+		accepted <- hub.publish(broadcastMessage{Payload: []byte(`{"content":"` + content + `"}`)})
+	}()
 
-// drainRateLimiter spends a full bucket and asserts the next message is refused,
-// leaving the limiter empty.
-//
-// How the limiter is reached is the caller's to supply, because the tests below
-// reach it two ways: the refill tests spend through the seam at a fixed instant,
-// via [attemptAt], while the one test that drives the production path passes
-// allow itself.
-func drainRateLimiter(t *testing.T, capacity int, attempt func() bool) {
-	t.Helper()
+	return accepted
+}
 
-	for i := range capacity {
-		if !attempt() {
-			t.Fatalf("burst token %d was denied", i)
+// TestHubStartsWithNoClients verifies that a freshly started hub reports an
+// empty client set.
+func TestHubStartsWithNoClients(t *testing.T) {
+	t.Parallel()
+
+	hub := startTestHub(t, nil)
+
+	if count := hub.ClientCount(); count != 0 {
+		t.Errorf("Expected 0 clients on a new hub, got %d", count)
+	}
+}
+
+// TestHubAcceptsBroadcastWithNoClients verifies that broadcasting into an empty
+// hub is accepted and leaves the hub running.
+func TestHubAcceptsBroadcastWithNoClients(t *testing.T) {
+	t.Parallel()
+
+	hub := startTestHub(t, nil)
+
+	select {
+	case accepted := <-publishAsync(hub, "nobody home"):
+		if !accepted {
+			t.Fatal("publish rejected a message on a running hub")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("publish did not accept a message")
+	}
+
+	// The reply proves the loop finished the broadcast and came back around.
+	if count := hub.ClientCount(); count != 0 {
+		t.Errorf("Expected 0 clients after an empty broadcast, got %d", count)
+	}
+}
+
+// TestHubHandlesConcurrentBroadcasts verifies that many goroutines can publish
+// at once without deadlocking the event loop.
+func TestHubHandlesConcurrentBroadcasts(t *testing.T) {
+	t.Parallel()
+
+	hub := startTestHub(t, nil)
+
+	const senders = 10
+	results := make([]<-chan bool, senders)
+	for i := range results {
+		results[i] = publishAsync(hub, "concurrent")
+	}
+
+	for _, result := range results {
+		select {
+		case accepted := <-result:
+			if !accepted {
+				t.Error("publish rejected a message on a running hub")
+			}
+		case <-time.After(2 * time.Second):
+			t.Error("publish blocked under concurrent senders")
 		}
 	}
 
-	if attempt() {
-		t.Fatal("limiter allowed a message past its burst")
+	if count := hub.ClientCount(); count != 0 {
+		t.Errorf("Expected 0 clients after concurrent broadcasts, got %d", count)
 	}
 }
 
-// attemptAt is the attempt [drainRateLimiter] needs to spend rl through the seam
-// at a fixed instant, leaving its baseline at now.
-func attemptAt(rl *rateLimiter, now time.Time) func() bool {
-	return func() bool { return rl.allowAt(now) }
+// TestHubShutdownStopsTheEventLoop verifies that shutdown drains the hub and
+// leaves it reporting stopped.
+func TestHubShutdownStopsTheEventLoop(t *testing.T) {
+	t.Parallel()
+
+	hub := startTestHub(t, nil)
+
+	if hub.IsStopped() {
+		t.Fatal("Hub reported stopped while still running")
+	}
+
+	if err := shutdownHub(t, hub); err != nil {
+		t.Fatalf(shutdownErrorMsg, err)
+	}
+
+	if !hub.IsStopped() {
+		t.Error("Hub did not report stopped after shutdown returned")
+	}
 }
 
-// allowedAt reports how many messages the limiter permits at a single instant,
-// stopping at the first refusal and giving up after limit calls.
-func allowedAt(rl *rateLimiter, now time.Time, limit int) int {
-	for i := range limit {
-		if !rl.allowAt(now) {
-			return i
+// TestHubShutdownBeforeStartIsNoOp verifies that shutting down a hub that never
+// ran succeeds instead of blocking on an event loop that does not exist.
+func TestHubShutdownBeforeStartIsNoOp(t *testing.T) {
+	t.Parallel()
+
+	hub := newHub(nil)
+
+	if err := shutdownHub(t, hub); err != nil {
+		t.Errorf("Expected shutdown of an unstarted hub to succeed, got: %v", err)
+	}
+}
+
+// TestHubShutdownRightAfterStartStopsTheHub verifies that shutdown called
+// straight after start stops the event loop, instead of returning nil because
+// the loop's goroutine had not been scheduled yet and then leaving it running
+// for good. The hub is shut down at once, with no barrier in between, because
+// that is the case being pinned.
+func TestHubShutdownRightAfterStartStopsTheHub(t *testing.T) {
+	t.Parallel()
+
+	const rounds = 200
+
+	for range rounds {
+		hub := newHub(nil)
+		shutdownAtCleanup(t, hub)
+		hub.start()
+
+		if err := shutdownHub(t, hub); err != nil {
+			t.Fatalf(shutdownErrorMsg, err)
 		}
-	}
 
-	return limit
-}
-
-// TestZeroValueRateLimiterAllows pins the zero value as unlimited. A Client
-// assembled without NewClient must not be silently throttled to nothing.
-func TestZeroValueRateLimiterAllows(t *testing.T) {
-	t.Parallel()
-
-	c := &Client{}
-	for i := range 100 {
-		if !c.rateLimiter.allow() {
-			t.Fatalf("zero-value limiter denied message %d", i)
-		}
-	}
-}
-
-// TestRateLimiterThrottlesAtCapacity checks the configured limiter still
-// throttles, so the zero-value escape hatch has not disabled the real path.
-//
-// It reaches the limiter the way the read pump does, through the no-argument
-// entry points, which is what it is for: those read the clock themselves, so an
-// hour-long refill interval cannot hand a token back mid-test and the burst is
-// the whole budget. The refill arithmetic is pinned below, against the allowAt
-// seam.
-//
-// What it does not do is check the constructor's baseline against allow's
-// clock, in either direction. A baseline behind the clock is absorbed by the cap
-// at capacity, so a bucket that starts full arrives full anyway; one ahead of it
-// yields negative elapsed time, which allowAt skips — and over the microseconds
-// this test runs, neither shows up as a token granted or withheld. The mutants
-// were tried and survived.
-func TestRateLimiterThrottlesAtCapacity(t *testing.T) {
-	t.Parallel()
-
-	const capacity = 3
-	rl := newRateLimiter(capacity, time.Hour)
-
-	drainRateLimiter(t, capacity, rl.allow)
-}
-
-// TestRateLimiterRefillsFromElapsedTime pins partial refill. Four tokens per
-// second means 600ms is worth 2.4 of them, and the 0.4 left over must carry:
-// the following 200ms is worth only 0.8 on its own, so the message it lets
-// through is proof the residue was kept rather than rounded away.
-func TestRateLimiterRefillsFromElapsedTime(t *testing.T) {
-	t.Parallel()
-
-	const capacity = 4
-	rl := newRateLimiterAt(capacity, time.Second, rateLimiterEpoch)
-	drainRateLimiter(t, capacity, attemptAt(&rl, rateLimiterEpoch))
-
-	if n := allowedAt(&rl, rateLimiterEpoch.Add(600*time.Millisecond), capacity); n != 2 {
-		t.Fatalf("600ms of refill allowed %d messages, want 2", n)
-	}
-
-	if n := allowedAt(&rl, rateLimiterEpoch.Add(800*time.Millisecond), capacity); n != 1 {
-		t.Fatalf("a further 200ms of refill allowed %d messages, want 1", n)
-	}
-}
-
-// TestRateLimiterRestoresBurstAfterOneInterval pins the headline promise: one
-// interval after the bucket ran dry, the whole burst is back and no more.
-func TestRateLimiterRestoresBurstAfterOneInterval(t *testing.T) {
-	t.Parallel()
-
-	const (
-		capacity = 3
-		interval = 500 * time.Millisecond
-	)
-
-	rl := newRateLimiterAt(capacity, interval, rateLimiterEpoch)
-	drainRateLimiter(t, capacity, attemptAt(&rl, rateLimiterEpoch))
-
-	if n := allowedAt(&rl, rateLimiterEpoch.Add(interval), capacity+1); n != capacity {
-		t.Fatalf("one interval restored %d messages, want %d", n, capacity)
-	}
-}
-
-// TestRateLimiterCapsRefillAtCapacity pins that idling banks nothing: however
-// long a connection stays quiet it comes back with one burst, not a backlog.
-func TestRateLimiterCapsRefillAtCapacity(t *testing.T) {
-	t.Parallel()
-
-	const (
-		capacity = 3
-		interval = time.Second
-	)
-
-	rl := newRateLimiterAt(capacity, interval, rateLimiterEpoch)
-	drainRateLimiter(t, capacity, attemptAt(&rl, rateLimiterEpoch))
-
-	if n := allowedAt(&rl, rateLimiterEpoch.Add(100*interval), capacity*10); n != capacity {
-		t.Fatalf("100 idle intervals allowed %d messages, want %d", n, capacity)
-	}
-}
-
-// TestRateLimiterGrantsNothingWithoutElapsedTime pins refill as a function of
-// the clock and nothing else: repeated calls at one instant never restore a
-// token, however many of them there are.
-func TestRateLimiterGrantsNothingWithoutElapsedTime(t *testing.T) {
-	t.Parallel()
-
-	const capacity = 2
-	rl := newRateLimiterAt(capacity, time.Second, rateLimiterEpoch)
-	drainRateLimiter(t, capacity, attemptAt(&rl, rateLimiterEpoch))
-
-	for i := range 10 {
-		if rl.allowAt(rateLimiterEpoch) {
-			t.Fatalf("a frozen clock refilled a token at call %d", i)
+		if !hub.IsStopped() {
+			t.Fatal("Hub kept running after shutdown returned straight after start")
 		}
 	}
 }
 
-// TestRateLimiterIgnoresBackwardsClock pins the guard on non-positive elapsed
-// time. Negative elapsed time must be skipped rather than folded into the
-// arithmetic, where it would subtract tokens the connection had already earned.
-func TestRateLimiterIgnoresBackwardsClock(t *testing.T) {
+// TestHubStartTwiceRunsOneLoop verifies that start is idempotent: repeated and
+// concurrent calls run a single event loop, which one shutdown then stops. A
+// second loop would close the hub's done channel twice and panic.
+func TestHubStartTwiceRunsOneLoop(t *testing.T) {
 	t.Parallel()
 
-	const capacity = 2
-	past := rateLimiterEpoch.Add(-time.Hour)
+	hub := newHub(nil)
+	shutdownAtCleanup(t, hub)
 
-	// A rewound clock neither grants tokens nor destroys them: the full burst is
-	// still spendable, and it is still only a burst.
-	rl := newRateLimiterAt(capacity, time.Second, rateLimiterEpoch)
-	if n := allowedAt(&rl, past, capacity+1); n != capacity {
-		t.Fatalf("a backwards clock left %d messages of burst, want %d", n, capacity)
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Go(hub.start)
+	}
+	wg.Wait()
+	hub.start()
+
+	if got := hub.ClientCount(); got != 0 {
+		t.Fatalf("Expected no clients on a fresh hub, got %d", got)
 	}
 
-	// Nor may it move the baseline: if it had, this call would see an hour of
-	// elapsed time rather than nothing since the epoch.
-	if rl.allowAt(rateLimiterEpoch) {
-		t.Fatal("limiter refilled from a rewound baseline")
+	if err := shutdownHub(t, hub); err != nil {
+		t.Fatalf(shutdownErrorMsg, err)
 	}
-}
+	if !hub.IsStopped() {
+		t.Error("Hub kept running after shutdown")
+	}
 
-// BenchmarkRateLimiterAllow measures the production entry point, clock read
-// included: the read pump calls allow once per message, so timing allowAt
-// instead would leave out work the hot path really does.
-func BenchmarkRateLimiterAllow(b *testing.B) {
-	rl := newRateLimiter(1_000_000, time.Second)
-
-	b.ReportAllocs()
-	for b.Loop() {
-		rl.allow()
+	if err := shutdownHub(t, hub); err != nil {
+		t.Errorf("Expected a second shutdown to succeed, got: %v", err)
 	}
 }
 
-func BenchmarkOriginCheck(b *testing.B) {
-	cfg := resolveConfig(&Config{AllowedOrigins: []string{"http://localhost:8080", "https://example.com"}})
+// TestHubShutdownIsIdempotent verifies that concurrent and repeated shutdown
+// calls are safe and all report success.
+func TestHubShutdownIsIdempotent(t *testing.T) {
+	t.Parallel()
 
-	req := newOriginRequest(b, "https://example.com")
+	hub := startTestHub(t, nil)
 
-	b.ReportAllocs()
-	for b.Loop() {
-		if !cfg.isOriginAllowed(req) {
-			b.Fatal("expected origin to be allowed")
+	const callers = 3
+	var wg sync.WaitGroup
+	wg.Add(callers)
+
+	errs := make(chan error, callers)
+	for range callers {
+		go func() {
+			defer wg.Done()
+			errs <- shutdownHub(t, hub)
+		}()
+	}
+
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		if err != nil {
+			t.Errorf("Concurrent shutdown returned an error: %v", err)
 		}
+	}
+
+	if err := shutdownHub(t, hub); err != nil {
+		t.Errorf("shutdown after shutdown returned an error: %v", err)
+	}
+}
+
+// TestHubClientCountAfterShutdown verifies that ClientCount stops blocking once
+// the event loop has exited.
+func TestHubClientCountAfterShutdown(t *testing.T) {
+	t.Parallel()
+
+	hub := startTestHub(t, nil)
+
+	if err := shutdownHub(t, hub); err != nil {
+		t.Fatalf(shutdownErrorMsg, err)
+	}
+
+	done := make(chan int, 1)
+	go func() { done <- hub.ClientCount() }()
+
+	select {
+	case count := <-done:
+		if count != 0 {
+			t.Errorf("Expected 0 clients after shutdown, got %d", count)
+		}
+	case <-time.After(time.Second):
+		t.Error("ClientCount blocked after the hub stopped")
+	}
+}
+
+// TestHubPublishAfterShutdownIsRejected verifies that publish loses the race
+// against shutdown by reporting rejection, rather than blocking forever on an
+// event loop that has stopped reading.
+func TestHubPublishAfterShutdownIsRejected(t *testing.T) {
+	t.Parallel()
+
+	hub := startTestHub(t, nil)
+
+	if err := shutdownHub(t, hub); err != nil {
+		t.Fatalf(shutdownErrorMsg, err)
+	}
+
+	select {
+	case accepted := <-publishAsync(hub, "too late"):
+		if accepted {
+			t.Error("publish accepted a message on a stopped hub")
+		}
+	case <-time.After(time.Second):
+		t.Error("publish blocked on a stopped hub")
+	}
+}
+
+// TestHubShutdownReturnsPromptlyWhenIdle verifies that shutdown returns promptly
+// rather than blocking for its whole budget when there is nothing left to
+// drain.
+func TestHubShutdownReturnsPromptlyWhenIdle(t *testing.T) {
+	t.Parallel()
+
+	hub := startTestHub(t, nil)
+
+	// A budget this short is only met if shutdown returns as soon as the event
+	// loop and the pumps are done, rather than waiting out a timer.
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	if err := hub.shutdown(ctx); err != nil {
+		t.Errorf("Expected an idle hub to shut down within its budget, got: %v", err)
 	}
 }

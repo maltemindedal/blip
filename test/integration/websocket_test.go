@@ -25,18 +25,18 @@ func TestWebSocketEndpointIntegration(t *testing.T) {
 
 	testServer, _ := newTestServer(t)
 
-	wsURL := buildWebSocketURL(t, testServer.URL)
+	wsURL := testServer.wsURL()
 
 	t.Run("Successful WebSocket Connection", func(t *testing.T) {
-		testSuccessfulWebSocketConnection(t, wsURL, testServer.URL)
+		testSuccessfulWebSocketConnection(t, wsURL, testServer.URL())
 	})
 
 	t.Run("Invalid HTTP Method", func(t *testing.T) {
-		testInvalidHTTPMethod(t, testServer.URL)
+		testInvalidHTTPMethod(t, testServer.URL())
 	})
 
 	t.Run("GET Without WebSocket Headers", func(t *testing.T) {
-		testGETWithoutWebSocketHeaders(t, testServer.URL)
+		testGETWithoutWebSocketHeaders(t, testServer.URL())
 	})
 }
 
@@ -105,8 +105,8 @@ func TestWebSocketMessageBroadcasting(t *testing.T) {
 
 	testServer, hub := newTestServer(t)
 
-	wsURL := buildWebSocketURL(t, testServer.URL)
-	connections := dialClients(t, hub, wsURL, testServer.URL, 3)
+	wsURL := testServer.wsURL()
+	connections := dialClients(t, hub, wsURL, testServer.URL(), 3)
 
 	messageContent := "Hello from client 0!"
 	sendMessageFromClient(t, connections[0], messageContent)
@@ -220,10 +220,10 @@ func TestWebSocketConnectionLifecycle(t *testing.T) {
 	t.Parallel()
 
 	testServer, hub := newTestServer(t)
-	wsURL := buildWebSocketURL(t, testServer.URL)
+	wsURL := testServer.wsURL()
 
 	t.Run("Connection and Disconnection", func(t *testing.T) {
-		conn := dial(t, hub, wsURL, testServer.URL)
+		conn := dial(t, hub, wsURL, testServer.URL())
 
 		// Test that connection is active
 		if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
@@ -241,7 +241,7 @@ func TestWebSocketConnectionLifecycle(t *testing.T) {
 		// Each connection must be fully registered and then fully unregistered
 		// before the next one, which is what makes the count assertions exact.
 		for i := range 3 {
-			conn := dial(t, hub, wsURL, testServer.URL)
+			conn := dial(t, hub, wsURL, testServer.URL())
 
 			testMsg := "Test message " + strconv.Itoa(i)
 			if err := conn.WriteMessage(websocket.TextMessage, mustMarshalMessage(t, testMsg)); err != nil {
@@ -265,12 +265,12 @@ func TestWebSocketConcurrentConnections(t *testing.T) {
 
 	testServer, _ := newTestServer(t)
 
-	wsURL := buildWebSocketURL(t, testServer.URL)
+	wsURL := testServer.wsURL()
 
 	const numConcurrentClients = 10
 	done := make(chan error, numConcurrentClients)
 
-	launchConcurrentClients(wsURL, testServer.URL, numConcurrentClients, done)
+	launchConcurrentClients(wsURL, testServer.URL(), numConcurrentClients, done)
 	waitForConcurrentClients(t, numConcurrentClients, done)
 }
 
@@ -360,7 +360,7 @@ func TestWebSocketOriginValidation(t *testing.T) {
 		cfg.AllowedOrigins = append(cfg.AllowedOrigins, allowedOrigin)
 	})
 
-	wsURL := buildWebSocketURL(t, testServer.URL)
+	wsURL := testServer.wsURL()
 
 	t.Run("Allowed origin", func(t *testing.T) {
 		testAllowedOrigin(t, wsURL, allowedOrigin)
@@ -424,7 +424,7 @@ func TestWebSocketMessageSizeLimit(t *testing.T) {
 		cfg.MaxMessageSize = limit
 	})
 
-	sender, receiver := dialPair(t, hub, buildWebSocketURL(t, testServer.URL), testServer.URL)
+	sender, receiver := dialPair(t, hub, testServer.wsURL(), testServer.URL())
 
 	oversizedContent := strings.Repeat("A", int(limit)+10)
 	oversizedPayload := mustMarshalMessage(t, oversizedContent)
@@ -461,15 +461,15 @@ func TestWebSocketRateLimiting(t *testing.T) {
 		cfg.RateLimit = rateCfg
 	})
 
-	wsURL := buildWebSocketURL(t, testServer.URL)
-	sender, receiver := dialPair(t, hub, wsURL, testServer.URL)
+	wsURL := testServer.wsURL()
+	sender, receiver := dialPair(t, hub, wsURL, testServer.URL())
 
 	sendAndReceiveBurstMessages(t, sender, receiver, rateCfg.Burst)
 	testOverLimitMessageRejected(t, sender, receiver)
 
 	// A fresh receiver starts with an empty read buffer, so the message after
 	// the refill is unambiguously the one this test is waiting for.
-	receiver = reconnectReceiver(t, hub, wsURL, testServer.URL, receiver)
+	receiver = reconnectReceiver(t, hub, wsURL, testServer.URL(), receiver)
 	testMessageAfterRefill(t, sender, receiver, rateCfg.RefillInterval)
 }
 
@@ -540,7 +540,7 @@ func testMessageAfterRefill(t *testing.T, sender, receiver *websocket.Conn, refi
 	t.Helper()
 
 	// Not a synchronization sleep: reaching the limiter through a real socket
-	// means going through NewClient, which builds a limiter on the real clock,
+	// means going through newClient, which builds a limiter on the real clock,
 	// so wall-clock time is the only clock this test can advance.
 	time.Sleep(refillInterval + 100*time.Millisecond)
 

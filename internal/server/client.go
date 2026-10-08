@@ -19,10 +19,10 @@ const (
 	sendBufferSz = 256
 )
 
-// Client represents a WebSocket client connection in the chat system.
+// wsClient represents a WebSocket client connection in the chat system.
 // It manages the connection state, message sending channel, hub reference,
 // and client address information.
-type Client struct {
+type wsClient struct {
 	conn           *websocket.Conn
 	send           chan []byte
 	hub            *Hub
@@ -33,17 +33,17 @@ type Client struct {
 	throttled      bool // read pump only: a throttling episode has been logged
 }
 
-// NewClient creates a new Client instance with the provided WebSocket connection,
+// newClient creates a new client with the provided WebSocket connection,
 // hub reference, and client address. The client's send channel is buffered
 // to handle message queuing.
 //
-// The size limit and the rate limit come from the hub the client is joining,
-// which resolved them when it was built.
-func NewClient(conn *websocket.Conn, hub *Hub, addr string) *Client {
-	cfg := &hub.cfg
-	conn.SetReadLimit(cfg.MaxMessageSize)
-
-	return &Client{
+// cfg is the resolved configuration the connection runs under, which in
+// production is hub's own; the size limit and the rate limit both come from it,
+// so the two cannot be taken from different places. Nothing here touches conn
+// or hub, so a test can build a client without either and still get the
+// limiter and the limits the read pump would.
+func newClient(conn *websocket.Conn, hub *Hub, addr string, cfg *resolvedConfig) *wsClient {
+	return &wsClient{
 		conn:           conn,
 		send:           make(chan []byte, sendBufferSz),
 		hub:            hub,
@@ -56,18 +56,18 @@ func NewClient(conn *websocket.Conn, hub *Hub, addr string) *Client {
 
 // inbox is the channel the hub delivers into, and closes when it drops this
 // client. It satisfies [clientConn].
-func (c *Client) inbox() chan<- []byte { return c.send }
+func (c *wsClient) inbox() chan<- []byte { return c.send }
 
 // remoteAddr is the address the hub names this client by in its log records.
 // It satisfies [clientConn].
-func (c *Client) remoteAddr() string { return c.addr }
+func (c *wsClient) remoteAddr() string { return c.addr }
 
 // serve runs the connection's two pumps and returns once both have exited. It
 // satisfies [clientConn], so the hub launches one goroutine per client and
 // stays out of how many the connection actually needs — gorilla/websocket
 // permits one concurrent reader and one concurrent writer, which is why there
 // are two.
-func (c *Client) serve() {
+func (c *wsClient) serve() {
 	writeDone := make(chan struct{})
 	go func() {
 		defer close(writeDone)
@@ -78,9 +78,12 @@ func (c *Client) serve() {
 	<-writeDone
 }
 
-// setupReadConnection configures read deadlines and the pong handler for the
-// WebSocket connection.
-func (c *Client) setupReadConnection() {
+// setupReadConnection configures the message size limit, read deadlines, and the
+// pong handler for the WebSocket connection. It runs on the read pump before the
+// first read, which is the only goroutine that reads.
+func (c *wsClient) setupReadConnection() {
+	c.conn.SetReadLimit(c.maxMessageSize)
+
 	if err := c.conn.SetReadDeadline(time.Now().Add(pongWait)); err != nil {
 		log().Warn("failed to set initial read deadline", "addr", c.addr, "error", err)
 	}
@@ -92,7 +95,7 @@ func (c *Client) setupReadConnection() {
 
 // handleReadError logs the error at an appropriate level and always reports
 // that the read loop should stop, since every read error is terminal.
-func (c *Client) handleReadError(err error) bool {
+func (c *wsClient) handleReadError(err error) bool {
 	if err == nil {
 		return false
 	}
@@ -119,7 +122,7 @@ func (c *Client) handleReadError(err error) bool {
 // checkRateLimit reports whether the client is within its message budget. Only
 // the first discard of a throttling episode is logged, so a client flooding past
 // its burst cannot make the server write a log line per frame it sends.
-func (c *Client) checkRateLimit() bool {
+func (c *wsClient) checkRateLimit() bool {
 	if c.rateLimiter.allow() {
 		c.throttled = false
 		return true
@@ -138,7 +141,7 @@ func (c *Client) checkRateLimit() bool {
 }
 
 // processMessage normalizes a raw frame and hands it to the hub for broadcast.
-func (c *Client) processMessage(rawMessage []byte) bool {
+func (c *wsClient) processMessage(rawMessage []byte) bool {
 	payload, err := normalizeMessage(rawMessage)
 	if err != nil {
 		log().Warn("invalid message", "addr", c.addr, "error", err)
@@ -149,7 +152,7 @@ func (c *Client) processMessage(rawMessage []byte) bool {
 		log().Debug("received message", "addr", c.addr, "payload", string(payload))
 	}
 
-	if !c.hub.Publish(BroadcastMessage{Sender: c, Payload: payload}) {
+	if !c.hub.publish(broadcastMessage{Sender: c, Payload: payload}) {
 		log().Debug("skipping broadcast; hub is shutting down", "addr", c.addr)
 		return false
 	}
@@ -158,14 +161,14 @@ func (c *Client) processMessage(rawMessage []byte) bool {
 }
 
 // cleanupReadPump handles cleanup tasks when readPump exits.
-func (c *Client) cleanupReadPump() {
-	c.hub.Unregister(c)
+func (c *wsClient) cleanupReadPump() {
+	c.hub.unregister(c)
 	c.closeConnection()
 }
 
 // handleReadMessage processes a single message read from the WebSocket and
 // reports whether the read loop should stop.
-func (c *Client) handleReadMessage() bool {
+func (c *wsClient) handleReadMessage() bool {
 	_, rawMessage, err := c.conn.ReadMessage()
 	if err != nil {
 		return c.handleReadError(err)
@@ -178,7 +181,7 @@ func (c *Client) handleReadMessage() bool {
 	return false
 }
 
-func (c *Client) readPump() {
+func (c *wsClient) readPump() {
 	defer c.cleanupReadPump()
 
 	c.setupReadConnection()
@@ -187,119 +190,100 @@ func (c *Client) readPump() {
 	}
 }
 
-func (c *Client) writePump() {
+// writePump is the connection's only writer. It sends what the hub delivers,
+// coalescing a burst into one frame, pings the peer every pingPeriod, and sends
+// a close frame once the hub closes the inbox. It stops at the first write that
+// fails, or as soon as the hub begins shutting down, and closes the connection
+// either way.
+func (c *wsClient) writePump() {
 	ticker := time.NewTicker(pingPeriod)
 	defer func() {
 		ticker.Stop()
 		c.closeConnection()
 	}()
 
-	for c.processWriteEvent(ticker) {
-	}
-}
+	for {
+		select {
+		case message, ok := <-c.send:
+			if !ok {
+				// The hub closed the inbox: it dropped or unregistered this
+				// client.
+				c.writeControl(websocket.CloseMessage, "close")
+				return
+			}
 
-// processWriteEvent waits for the next write event and returns false when the
-// pump should stop processing.
-func (c *Client) processWriteEvent(ticker *time.Ticker) bool {
-	select {
-	case message, ok := <-c.send:
-		return c.handleMessage(message, ok)
-	case <-ticker.C:
-		return c.handlePing()
-	case <-c.hub.shutdown:
-		return false
+			if !c.writeMessages(message) {
+				return
+			}
+
+		case <-ticker.C:
+			if !c.writeControl(websocket.PingMessage, "ping") {
+				return
+			}
+
+		case <-c.hub.stopping():
+			return
+		}
 	}
 }
 
 // closeConnection safely closes the WebSocket connection with proper error handling.
-func (c *Client) closeConnection() {
+func (c *wsClient) closeConnection() {
 	if err := c.conn.Close(); err != nil && !isExpectedCloseError(err) {
 		log().Debug("error closing connection", "addr", c.addr, "error", err)
 	}
 }
 
-// handleMessage processes outgoing messages and returns false if the connection
-// should be closed.
-func (c *Client) handleMessage(message []byte, ok bool) bool {
+// extendWriteDeadline gives the next write writeWait to complete, and reports
+// whether the deadline could be set.
+func (c *wsClient) extendWriteDeadline() bool {
 	if err := c.conn.SetWriteDeadline(time.Now().Add(writeWait)); err != nil {
 		log().Debug("error setting write deadline", "addr", c.addr, "error", err)
 		return false
 	}
 
-	if !ok {
-		return c.writeCloseMessage()
-	}
-
-	return c.writeTextMessage(message)
+	return true
 }
 
-// writeCloseMessage sends a close frame to the client.
-func (c *Client) writeCloseMessage() bool {
-	if err := c.conn.WriteMessage(websocket.CloseMessage, nil); err != nil && !isExpectedCloseError(err) {
-		log().Debug("error writing close message", "addr", c.addr, "error", err)
+// writeControl sends a close or ping frame with no payload, and reports whether
+// it was written. name identifies the frame in the debug log's frame attribute.
+func (c *wsClient) writeControl(messageType int, name string) bool {
+	if !c.extendWriteDeadline() {
+		return false
 	}
 
-	return false
+	if err := c.conn.WriteMessage(messageType, nil); err != nil {
+		if !isExpectedCloseError(err) {
+			log().Debug("error writing control frame", "addr", c.addr, "frame", name, "error", err)
+		}
+		return false
+	}
+
+	return true
 }
 
-// writeTextMessage writes a text message, coalescing any frames already queued
-// on the send channel into the same WebSocket frame to amortize syscalls.
-func (c *Client) writeTextMessage(message []byte) bool {
+// writeMessages sends first, and every message already queued behind it, as one
+// text frame, and reports whether the frame was written.
+func (c *wsClient) writeMessages(first []byte) bool {
+	if !c.extendWriteDeadline() {
+		return false
+	}
+
 	w, err := c.conn.NextWriter(websocket.TextMessage)
 	if err != nil {
 		log().Debug("error creating writer", "addr", c.addr, "error", err)
 		return false
 	}
 
-	if !c.writeFrameBody(w, message) {
-		// The frame is already broken; discard the writer without flushing it.
+	if err = writeFrame(w, first, c.send); err != nil {
+		log().Debug("error writing frame", "addr", c.addr, "error", err)
+		// The writer keeps a failed write's error and returns it from Close
+		// without flushing, so this only releases the writer.
 		_ = w.Close()
 		return false
 	}
 
-	return c.closeWriter(w)
-}
-
-// writeFrameBody writes message followed by everything already queued on the
-// send channel, newline-separated. It reports whether the whole frame was
-// written.
-func (c *Client) writeFrameBody(w io.Writer, message []byte) bool {
-	if !c.writeChunk(w, message, "message") {
-		return false
-	}
-
-	// Snapshot the depth once: anything queued after this point belongs to the
-	// next frame.
-	for range len(c.send) {
-		queued, ok := <-c.send
-		if !ok {
-			return false
-		}
-
-		if !c.writeChunk(w, newline, "separator") || !c.writeChunk(w, queued, "queued message") {
-			return false
-		}
-	}
-
-	return true
-}
-
-// newline separates coalesced messages inside a single frame.
-var newline = []byte{'\n'}
-
-// writeChunk writes one span of bytes into the open frame, logging what failed.
-func (c *Client) writeChunk(w io.Writer, chunk []byte, what string) bool {
-	if _, err := w.Write(chunk); err != nil {
-		log().Debug("error writing frame chunk", "addr", c.addr, "chunk", what, "error", err)
-		return false
-	}
-
-	return true
-}
-
-// closeWriter flushes the frame to the connection.
-func (c *Client) closeWriter(w io.Closer) bool {
-	if err := w.Close(); err != nil {
+	if err = w.Close(); err != nil {
 		log().Debug("error closing writer", "addr", c.addr, "error", err)
 		return false
 	}
@@ -307,19 +291,35 @@ func (c *Client) closeWriter(w io.Closer) bool {
 	return true
 }
 
-// handlePing sends a ping frame to keep the connection alive.
-func (c *Client) handlePing() bool {
-	if err := c.conn.SetWriteDeadline(time.Now().Add(writeWait)); err != nil {
-		log().Debug("error setting ping write deadline", "addr", c.addr, "error", err)
-		return false
+// newline separates coalesced messages inside a single frame. Clients split a
+// frame on it before parsing, so it is part of the wire format.
+var newline = []byte{'\n'}
+
+// writeFrame writes the body of one text frame into w: first, then every
+// message already queued, separated by newlines. It returns the first write
+// error.
+//
+// The queue's depth is read once, after first is written, so messages that
+// arrive after that go into the next frame, and the frame never waits on an
+// empty queue. Every receive below gets a message that was buffered when the
+// depth was read: the write pump is the queue's only receiver, and closing a
+// channel keeps what it buffered. So a hub that closes the inbox mid-frame still
+// has the messages queued before it did delivered; the pump sees the close on
+// its next receive.
+func writeFrame(w io.Writer, first []byte, queued <-chan []byte) error {
+	if _, err := w.Write(first); err != nil {
+		return err
 	}
 
-	if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
-		if !isExpectedCloseError(err) {
-			log().Debug("error writing ping", "addr", c.addr, "error", err)
+	for range len(queued) {
+		if _, err := w.Write(newline); err != nil {
+			return err
 		}
-		return false
+
+		if _, err := w.Write(<-queued); err != nil {
+			return err
+		}
 	}
 
-	return true
+	return nil
 }

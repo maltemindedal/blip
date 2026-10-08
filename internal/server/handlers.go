@@ -14,8 +14,8 @@ import (
 //go:embed testpage.html
 var testPageHTML []byte
 
-// HealthResponse is the exact body served by [HealthHandler]. It is exported so
-// tests assert against the served text rather than a copy of it.
+// HealthResponse is the exact body served at /. It is exported so tests assert
+// against the served text rather than a copy of it.
 const HealthResponse = "Blip server is running!"
 
 var (
@@ -32,24 +32,30 @@ var (
 // the connection count grows.
 var writeBufferPool = &sync.Pool{}
 
-// newUpgrader builds the upgrader for one hub. CheckOrigin is bound to that
-// hub's resolved configuration, so the allow-list is per hub rather than per
+// newUpgrader builds the upgrader for one hub's WebSocket handler. CheckOrigin is
+// bound to that hub's origin policy, so the allow-list is per hub rather than per
 // process; the write buffer pool is deliberately not, since sharing it is what
 // keeps memory flat as the connection count grows.
-func newUpgrader(cfg *resolvedConfig) websocket.Upgrader {
+func newUpgrader(origins originPolicy) websocket.Upgrader {
 	return websocket.Upgrader{
 		ReadBufferSize:  1024,
 		WriteBufferSize: 1024,
 		WriteBufferPool: writeBufferPool,
-		CheckOrigin:     cfg.checkOrigin,
+		CheckOrigin:     origins.checkOrigin,
 	}
 }
 
 // webSocketHandlerForHub returns the handler for WebSocket upgrade requests
 // against h. It validates that the request uses the GET method, upgrades the
-// HTTP connection to WebSocket, creates a new Client instance, and registers it
+// HTTP connection to WebSocket, creates a new client, and registers it
 // with the hub, which starts the client's read/write pumps.
+//
+// Every connection runs under h's resolved settings: the upgrader checks h's
+// origin policy, and each client gets h's size and rate limits.
 func webSocketHandlerForHub(h *Hub) http.HandlerFunc {
+	cfg := &h.cfg
+	upgrader := newUpgrader(cfg.origins)
+
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "Method not allowed. WebSocket endpoint only accepts GET requests.", http.StatusMethodNotAllowed)
@@ -61,17 +67,17 @@ func webSocketHandlerForHub(h *Hub) http.HandlerFunc {
 			return
 		}
 
-		conn, err := h.upgrader.Upgrade(w, r, nil)
+		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
 			log().Warn("websocket upgrade failed", "remote_addr", r.RemoteAddr, "error", err)
 			return
 		}
 
-		client := NewClient(conn, h, r.RemoteAddr)
+		client := newClient(conn, h, r.RemoteAddr, cfg)
 
 		// A rejected client was never added to the hub, so closing it is the
 		// handler's job.
-		if !h.Register(r.Context(), client) {
+		if !h.register(r.Context(), client) {
 			client.closeConnection()
 		}
 	}
@@ -94,15 +100,15 @@ func writeStatic(w http.ResponseWriter, r *http.Request, contentType, contentLen
 	}
 }
 
-// HealthHandler provides a simple health check endpoint that returns server status.
+// healthHandler provides a simple health check endpoint that returns server status.
 // It responds with a plain text message indicating the server is running.
-func HealthHandler(w http.ResponseWriter, r *http.Request) {
+func healthHandler(w http.ResponseWriter, r *http.Request) {
 	writeStatic(w, r, "text/plain", healthLength, healthResponse)
 }
 
-// TestPageHandler serves an HTML page for exercising the WebSocket endpoint.
+// testPageHandler serves an HTML page for exercising the WebSocket endpoint.
 // It provides a simple web interface to connect to the WebSocket endpoint,
 // send messages, and view real-time chat communication.
-func TestPageHandler(w http.ResponseWriter, r *http.Request) {
+func testPageHandler(w http.ResponseWriter, r *http.Request) {
 	writeStatic(w, r, "text/html; charset=utf-8", testPageLength, testPageHTML)
 }

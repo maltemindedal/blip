@@ -9,7 +9,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -34,28 +33,28 @@ func TestMultipleClientsMessageExchange(t *testing.T) {
 		t.Parallel()
 
 		testServer, hub := newMulticlientServer(t)
-		testFiveClientsSendingAndReceiving(t, hub, buildWebSocketURL(t, testServer.URL), testServer.URL)
+		testFiveClientsSendingAndReceiving(t, hub, testServer.wsURL(), testServer.URL())
 	})
 
 	t.Run("Clients joining and leaving dynamically", func(t *testing.T) {
 		t.Parallel()
 
 		testServer, hub := newMulticlientServer(t)
-		testDynamicJoiningAndLeaving(t, hub, buildWebSocketURL(t, testServer.URL), testServer.URL)
+		testDynamicJoiningAndLeaving(t, hub, testServer.wsURL(), testServer.URL())
 	})
 
 	t.Run("Rapid message exchange between clients", func(t *testing.T) {
 		t.Parallel()
 
 		testServer, hub := newMulticlientServer(t)
-		testRapidMessageExchange(t, hub, buildWebSocketURL(t, testServer.URL), testServer.URL)
+		testRapidMessageExchange(t, hub, testServer.wsURL(), testServer.URL())
 	})
 }
 
 // newMulticlientServer starts a server whose rate limit is wide enough that the
 // multi-client tests measure fan-out rather than throttling — rate limiting has
 // its own coverage in security_test.go.
-func newMulticlientServer(t *testing.T) (*httptest.Server, *server.Hub) {
+func newMulticlientServer(t *testing.T) (*testService, *server.Hub) {
 	t.Helper()
 
 	return newConfiguredTestServer(t, func(cfg *server.Config) {
@@ -71,14 +70,14 @@ func TestMultipleClientsConcurrentOperations(t *testing.T) {
 		t.Parallel()
 
 		testServer, _ := newMulticlientServer(t)
-		testConcurrentConnectionsAndDisconnections(t, buildWebSocketURL(t, testServer.URL), testServer.URL)
+		testConcurrentConnectionsAndDisconnections(t, testServer.wsURL(), testServer.URL())
 	})
 
 	t.Run("Concurrent message sending from multiple clients", func(t *testing.T) {
 		t.Parallel()
 
 		testServer, hub := newMulticlientServer(t)
-		testConcurrentMessageSending(t, hub, buildWebSocketURL(t, testServer.URL), testServer.URL)
+		testConcurrentMessageSending(t, hub, testServer.wsURL(), testServer.URL())
 	})
 }
 
@@ -90,7 +89,7 @@ func TestMultipleClientsEdgeCases(t *testing.T) {
 		t.Parallel()
 
 		testServer, hub := newMulticlientServer(t)
-		conn := dial(t, hub, buildWebSocketURL(t, testServer.URL), testServer.URL)
+		conn := dial(t, hub, testServer.wsURL(), testServer.URL())
 
 		// Send a message (should not receive it back)
 		sendMessageFromClient(t, conn, "Self message")
@@ -103,7 +102,7 @@ func TestMultipleClientsEdgeCases(t *testing.T) {
 		testServer, hub := newMulticlientServer(t)
 
 		const numClients = 5
-		connections := dialClients(t, hub, buildWebSocketURL(t, testServer.URL), testServer.URL, numClients)
+		connections := dialClients(t, hub, testServer.wsURL(), testServer.URL(), numClients)
 
 		var wg sync.WaitGroup
 		wg.Add(numClients)
@@ -125,7 +124,7 @@ func TestMultipleClientsEdgeCases(t *testing.T) {
 		t.Parallel()
 
 		testServer, hub := newMulticlientServer(t)
-		connections := dialClients(t, hub, buildWebSocketURL(t, testServer.URL), testServer.URL, 2)
+		connections := dialClients(t, hub, testServer.wsURL(), testServer.URL(), 2)
 
 		// Send message with empty content
 		sendMessageFromClient(t, connections[0], "")
@@ -139,7 +138,7 @@ func TestMultipleClientsEdgeCases(t *testing.T) {
 		t.Parallel()
 
 		testServer, hub := newMulticlientServer(t)
-		connections := dialClients(t, hub, buildWebSocketURL(t, testServer.URL), testServer.URL, 2)
+		connections := dialClients(t, hub, testServer.wsURL(), testServer.URL(), 2)
 
 		// Send a long message (but within size limit)
 		longContent := strings.Repeat("X", 50)
