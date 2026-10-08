@@ -10,9 +10,9 @@ type Message struct {
 // broadcastMessage encapsulates a message being broadcast by the hub,
 // including the originating client so it can be excluded from delivery.
 //
-// Sender is the hub's own view of a client rather than a [client], because the
+// Sender is the hub's own view of a client rather than a [wsClient], because the
 // hub compares it against the clients it holds. The read pump passes its own
-// [client], which satisfies that view; a test with no sender leaves it nil.
+// [wsClient], which satisfies that view; a test with no sender leaves it nil.
 type broadcastMessage struct {
 	Sender  clientConn
 	Payload []byte

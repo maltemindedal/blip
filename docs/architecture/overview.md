@@ -76,7 +76,7 @@ directly instead of copying it, and the slice of failed clients is scratch space
 messages, which makes the fan-out path allocation-free. The rule that keeps this sound is simple:
 every mutation of the client set must arrive through one of the hub's channels.
 
-What that map holds is not a `*client` but `clientConn`, the hub's own four-method view of one: an
+What that map holds is not a `*wsClient` but `clientConn`, the hub's own four-method view of one: an
 inbox to deliver into, a `serve` to run, a connection to close at shutdown, and an address to log.
 The client satisfies it over a real socket; a test registers a fake with no socket at all, which is
 the only practical way to reach the drop-on-full rule below — see [Testing](../guides/testing.md).
@@ -116,7 +116,7 @@ the hub's: the hub starts one goroutine per registered client, running `serve`, 
 pump on that goroutine, the write pump on a second, and returns only once both have exited. The hub's
 `WaitGroup` therefore has one entry per connection rather than two, and still covers both pumps.
 
-**Rate limiter** (`rate_limiter.go`) — a token bucket per connection, embedded in the `client` by
+**Rate limiter** (`rate_limiter.go`) — a token bucket per connection, embedded in the `wsClient` by
 value. Tokens refill continuously from elapsed time rather than on a timer, so there is no background
 goroutine and no allocation per client. It carries no mutex because only that connection's read pump
 ever touches it; sharing a limiter across goroutines would be a bug.
@@ -139,7 +139,7 @@ composite literal or a direct write to `last` could still arrange a stale baseli
 seam. That door predates the seam and is unchanged by it.
 
 The instant is an argument on the seam rather than a `func() time.Time` field on the struct
-deliberately: a limiter sits by value inside every `client` and `allow` runs once per message, so a
+deliberately: a limiter sits by value inside every `wsClient` and `allow` runs once per message, so a
 function-valued field would add an indirect call to the hot path and a word to every connection. The
 seam costs neither — `newRateLimiterAt` inlines into its wrapper, `allow` is one static call into
 `allowAt`, and the struct is unchanged.
@@ -242,7 +242,7 @@ by waiting on a channel nobody will read.
 | ---------------- | ---------------- | ------------------------------ | ------------------------- |
 | Hub run loop     | 1                | Process lifetime               | `Hub.start`               |
 | Client read pump | 1 per connection | Until read error or shutdown   | Hub run loop, via `serve` |
-| Client write pump| 1 per connection | Until send closed or shutdown  | `Client.serve`            |
+| Client write pump| 1 per connection | Until send closed or shutdown  | `wsClient.serve`          |
 | `ListenAndServe` | 1                | Process lifetime               | `Service.Run`             |
 
 Roughly two goroutines and a 256-message buffer per connection. Only the first of the two is the

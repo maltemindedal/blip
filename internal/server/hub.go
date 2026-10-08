@@ -10,7 +10,7 @@ import (
 )
 
 // clientConn is everything the hub needs from a connected client, and nothing
-// else. [client] satisfies it over a real socket; a test registers a fake,
+// else. [wsClient] satisfies it over a real socket; a test registers a fake,
 // which is the only way to drive the paths a real connection cannot be made to
 // take on demand — a send buffer that fills faster than it drains, above all.
 type clientConn interface {

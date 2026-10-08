@@ -230,7 +230,7 @@ func allowedAt(rl *rateLimiter, now time.Time, limit int) int {
 func TestZeroValueRateLimiterAllows(t *testing.T) {
 	t.Parallel()
 
-	c := &client{}
+	c := &wsClient{}
 	for i := range 100 {
 		if !c.rateLimiter.allow() {
 			t.Fatalf("zero-value limiter denied message %d", i)
