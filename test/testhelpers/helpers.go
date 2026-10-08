@@ -156,14 +156,6 @@ func Dial(t *testing.T, wsURL, origin string) *websocket.Conn {
 	return conn
 }
 
-// DialPair opens the sender/receiver pair that message-delivery tests need,
-// both from origin. Both connections are closed when the test ends.
-func DialPair(t *testing.T, wsURL, origin string) (sender, receiver *websocket.Conn) {
-	t.Helper()
-
-	return Dial(t, wsURL, origin), Dial(t, wsURL, origin)
-}
-
 // SendMessage sends a JSON message over the WebSocket connection.
 // It marshals the message with a "content" field and sends it as JSON.
 func SendMessage(conn *websocket.Conn, content string) error {

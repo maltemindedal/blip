@@ -18,7 +18,7 @@ func TestWriteAfterCloseFails(t *testing.T) {
 	t.Parallel()
 
 	testServer, _ := newTestServer(t)
-	conn := testhelpers.Dial(t, testServer.wsURL(), testServer.URL)
+	conn := testhelpers.Dial(t, testServer.wsURL(), testServer.URL())
 
 	if err := testhelpers.SendMessage(conn, "test"); err != nil {
 		t.Fatalf("Failed to write message: %v", err)
@@ -40,7 +40,7 @@ func TestReadDeadlineProducesTimeout(t *testing.T) {
 	t.Parallel()
 
 	testServer, _ := newTestServer(t)
-	conn := testhelpers.Dial(t, testServer.wsURL(), testServer.URL)
+	conn := testhelpers.Dial(t, testServer.wsURL(), testServer.URL())
 
 	if err := conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond)); err != nil {
 		t.Fatalf("Failed to set read deadline: %v", err)
@@ -63,19 +63,17 @@ func TestClientRegistersAndUnregisters(t *testing.T) {
 	t.Parallel()
 
 	testServer, hub := newTestServer(t)
-	conn := testhelpers.Dial(t, testServer.wsURL(), testServer.URL)
+	conn := dial(t, hub, testServer.wsURL(), testServer.URL())
 
-	testhelpers.WaitFor(t, 2*time.Second, "the client to register", func() bool {
-		return hub.ClientCount() == 1
-	})
+	if count := hub.ClientCount(); count != 1 {
+		t.Fatalf("Expected exactly 1 registered client, got %d", count)
+	}
 
 	if err := conn.Close(); err != nil {
 		t.Logf(errMsgFailedToClose, err)
 	}
 
-	testhelpers.WaitFor(t, 2*time.Second, "the client to unregister", func() bool {
-		return hub.ClientCount() == 0
-	})
+	waitForUnregister(t, hub, 0)
 }
 
 // TestMalformedMessageKeepsConnectionOpen verifies that a frame the server
@@ -85,11 +83,7 @@ func TestMalformedMessageKeepsConnectionOpen(t *testing.T) {
 	t.Parallel()
 
 	testServer, hub := newTestServer(t)
-	sender, receiver := testhelpers.DialPair(t, testServer.wsURL(), testServer.URL)
-
-	testhelpers.WaitFor(t, 2*time.Second, "both clients to register", func() bool {
-		return hub.ClientCount() == 2
-	})
+	sender, receiver := dialPair(t, hub, testServer.wsURL(), testServer.URL())
 
 	if err := sender.WriteMessage(websocket.TextMessage, []byte("not valid json")); err != nil {
 		t.Fatalf("Failed to send malformed message: %v", err)

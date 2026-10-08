@@ -48,9 +48,6 @@ const (
 type testService struct {
 	*server.Service
 
-	// URL is the service's base URL, http://host:port.
-	URL string
-
 	addr string
 	stop context.CancelFunc
 	done chan error
@@ -63,7 +60,7 @@ type testService struct {
 // goroutine of its own, until the returned service is shut down.
 func launch(svc *server.Service, addr string, run func(context.Context) error) *testService {
 	ctx, cancel := context.WithCancel(context.Background())
-	s := &testService{Service: svc, URL: "http://" + addr, addr: addr, stop: cancel, done: make(chan error, 1)}
+	s := &testService{Service: svc, addr: addr, stop: cancel, done: make(chan error, 1)}
 
 	go func() { s.done <- run(ctx) }()
 	return s
@@ -90,14 +87,19 @@ func startService(t *testing.T, port string) *testService {
 	svcTest := launch(svc, addr, svc.Run)
 	t.Cleanup(func() { _ = svcTest.shutdown(t) })
 
-	testhelpers.WaitForServer(t, svcTest.URL+"/", shutdownBudget)
+	testhelpers.WaitForServer(t, svcTest.URL()+"/", shutdownBudget)
 	return svcTest
 }
 
+// URL is the service's base URL, http://host:port, which is also the origin a
+// browser on it would send.
+func (s *testService) URL() string { return "http://" + s.addr }
+
 func (s *testService) wsURL() string { return "ws://" + s.addr + "/ws" }
 
-// shutdown cancels the service's context and returns what Run returned. Calling
-// it more than once — which the test cleanup does — replays the first result.
+// shutdown cancels the service's context and returns what Run or Serve
+// returned. Calling it more than once — which the test cleanup does — replays
+// the first result.
 func (s *testService) shutdown(t *testing.T) error {
 	t.Helper()
 
@@ -106,7 +108,7 @@ func (s *testService) shutdown(t *testing.T) error {
 		select {
 		case s.runErr = <-s.done:
 		case <-time.After(shutdownBudget):
-			t.Error("Run did not return within the shutdown budget")
+			t.Error("The test service did not return within the shutdown budget")
 		}
 	})
 

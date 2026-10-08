@@ -107,7 +107,6 @@ dials and requests:
 | `WaitFor(t, timeout, what, cond)`                 | Poll a condition to a deadline — use instead of `time.Sleep`         |
 | `WaitForServer(t, url, timeout)`                  | Block until a just-started server accepts requests                   |
 | `Dial(t, wsURL, origin)`                          | Dial a `ws://` URL from a given `Origin`, closed when the test ends  |
-| `DialPair(t, wsURL, origin)`                      | The sender/receiver pair delivery tests need                         |
 | `ConnectWebSocket(url)`                           | Dial with the default dev origin; returns an error instead of failing |
 | `SendMessage(conn, content)`                      | Send `{"content": ...}`                                              |
 | `MakeRequest(t, method, url)`                     | HTTP request, fully read; returns a `Response` with the body closed  |

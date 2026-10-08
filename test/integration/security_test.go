@@ -252,7 +252,7 @@ func newSizeLimitedServer(t *testing.T, limit int64) (hub *server.Hub, wsURL, or
 		cfg.MaxMessageSize = limit
 	})
 
-	return hub, testServer.wsURL(), testServer.URL
+	return hub, testServer.wsURL(), testServer.URL()
 }
 
 // Helper function to test message exactly at size limit
@@ -473,7 +473,7 @@ func testValidOriginWithSizeAndRateLimits(t *testing.T) {
 		}
 	})
 
-	sender, receiver := dialPair(t, hub, testServer.wsURL(), testServer.URL)
+	sender, receiver := dialPair(t, hub, testServer.wsURL(), testServer.URL())
 
 	// Send messages up to rate limit
 	for i := range burst {
