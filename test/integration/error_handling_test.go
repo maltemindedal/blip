@@ -1,9 +1,8 @@
-package unit
+package integration
 
 import (
 	"errors"
 	"net"
-	"net/http"
 	"net/url"
 	"testing"
 	"time"
@@ -15,32 +14,14 @@ import (
 
 const errMsgFailedToClose = "Failed to close connection: %v"
 
-// errorTestServer starts a server backed by a hub of its own, configured to
-// allow that server's origin and nothing else, so a test observes exactly its
-// own clients and its own settings. It returns the ws:// URL of the endpoint and
-// that hub.
+// errorTestServer starts a service of this test's own and returns the ws:// URL
+// of its endpoint and its hub, so a test observes exactly its own clients and
+// its own settings.
 func errorTestServer(t *testing.T) (wsURL string, hub *server.Hub) {
 	t.Helper()
 
-	// The hub owns its configuration, so the allow-list has to name the server
-	// before the hub exists: CreateTestServer opens the listener first and
-	// hands its URL in.
-	httpServer := testhelpers.CreateTestServer(t, func(baseURL string) http.Handler {
-		cfg := server.NewConfig()
-		cfg.AllowedOrigins = []string{baseURL}
-
-		hub = startHub(t, cfg)
-		return server.SetupRoutesWithHub(hub)
-	})
-
-	parsed, err := url.Parse(httpServer.URL)
-	if err != nil {
-		t.Fatalf("Failed to parse test server URL: %v", err)
-	}
-	parsed.Scheme = "ws"
-	parsed.Path = "/ws"
-
-	return parsed.String(), hub
+	testServer, hub := newTestServer(t)
+	return buildWebSocketURL(t, testServer.URL), hub
 }
 
 // TestWriteAfterCloseFails verifies that writing to a connection the client has

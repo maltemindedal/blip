@@ -22,22 +22,6 @@ const (
 	shutdownBudget = 5 * time.Second
 )
 
-// TestGracefulShutdown verifies that the server shuts down gracefully
-// when the hub receives a shutdown signal
-func TestGracefulShutdown(t *testing.T) {
-	t.Parallel()
-
-	hub := startHub(t, nil)
-
-	if err := hub.Shutdown(shutdownContext(t, shutdownBudget)); err != nil {
-		t.Errorf("Hub shutdown failed: %v", err)
-	}
-
-	if !hub.IsStopped() {
-		t.Error("Hub did not report stopped after shutdown")
-	}
-}
-
 // TestGracefulShutdownWithClients verifies that cancelling the service's context
 // closes every active client connection and leaves the hub stopped.
 func TestGracefulShutdownWithClients(t *testing.T) {
@@ -218,49 +202,6 @@ func TestShutdownWithActiveMessages(t *testing.T) {
 
 	if err := svc.shutdown(t); err != nil {
 		t.Errorf("Service run returned an error: %v", err)
-	}
-}
-
-// TestShutdownTimeout verifies that shutdown returns promptly rather than
-// blocking for its whole budget when there is nothing left to drain.
-func TestShutdownTimeout(t *testing.T) {
-	t.Parallel()
-
-	hub := startHub(t, nil)
-
-	// A budget this short is only met if Shutdown returns as soon as the event
-	// loop and the pumps are done, rather than waiting out a timer.
-	if err := hub.Shutdown(shutdownContext(t, 100*time.Millisecond)); err != nil {
-		t.Errorf("Expected an idle hub to shut down within its budget, got: %v", err)
-	}
-}
-
-// TestConcurrentShutdown verifies that multiple shutdown calls are safe and all
-// report success.
-func TestConcurrentShutdown(t *testing.T) {
-	t.Parallel()
-
-	hub := startHub(t, nil)
-
-	const callers = 3
-	var wg sync.WaitGroup
-	wg.Add(callers)
-
-	errs := make(chan error, callers)
-	for range callers {
-		go func() {
-			defer wg.Done()
-			errs <- hub.Shutdown(shutdownContext(t, shutdownBudget))
-		}()
-	}
-
-	wg.Wait()
-	close(errs)
-
-	for err := range errs {
-		if err != nil {
-			t.Errorf("Concurrent shutdown returned an error: %v", err)
-		}
 	}
 }
 

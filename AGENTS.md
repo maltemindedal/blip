@@ -19,7 +19,7 @@ go test -run '^$' -bench . -benchtime=10x ./internal/...
 ```
 
 - Edit loop: `go test -race ./...`. `make test` adds `-v` and buries the result in about 1,500 lines of log output.
-- Single test: `go test -race -run '^TestHubShutdown$' -v ./test/unit` (tests of unexported code are in `./internal/server`).
+- Single test: `go test -race -run '^TestHubShutdownIsIdempotent$' -v ./internal/server` (unit tests; integration tests are in `./test/integration`).
 - Allocation check: `go test -run '^$' -bench . -benchmem ./internal/...` (see Conventions).
 - After editing `Dockerfile` or `.dockerignore`: `docker build -t blip:dev .` (needs Docker; CI's `docker` job builds the image).
 - After editing the `Makefile`: `make -n <target>` for each target near the edit. An agent edit once deleted the `release:` line, and its recipe silently ran inside `build-current`.
@@ -37,7 +37,7 @@ The lifecycle tests in `test/integration` listen on fixed ports 127.0.0.1:18082-
 - **Hub ownership.** Before changing `hub.go`, `client.go` or `service.go`, read `docs/architecture/overview.md`. Only the hub's run loop touches the client map, which has no lock: every change arrives through `Register`, `Unregister` or `Publish`. Every blocking send or select carries a `<-shutdown` case.
 - **Logging.** Per-message logs go at Debug inside `if debugEnabled()`, because slog builds its arguments before it checks the level. A WARN a client can trigger repeatedly logs once per episode, as the rate-limit warning does. Log `msg` strings are an operator contract: renaming one means updating the alert table in `docs/guides/deploying-to-production.md`.
 - **Scope.** Add an env var, `Config` field or log line only when the task asks for one, since each becomes documented contract. Report problems outside the task instead of fixing them. Remove helpers your own change leaves unused.
-- **Tests.** Before writing, moving or renaming a test, read `docs/guides/testing.md`: which of `test/unit`, `test/integration` or `internal/server` it belongs in, the helpers, `t.Parallel()`, and waiting on `Hub.ClientCount()` instead of `time.Sleep`. Name an internal test file after the file it covers (`rate_limiter_internal_test.go`, not `rate_limiter_seam_test.go`).
+- **Tests.** Before writing, moving or renaming a test, read `docs/guides/testing.md`: whether it belongs in `internal/server` or `test/integration`, the helpers, `t.Parallel()`, and waiting on `Hub.ClientCount()` instead of `time.Sleep`. Name an internal test file after the file it covers (`rate_limiter_internal_test.go`, not `rate_limiter_seam_test.go`).
 - **Clock seams.** Production code reads the clock itself; tests drive an `xAt(now)` variant, and a test that parses the package sources (`TestClockSeamIsTestOnly`) keeps production off it. A caller-supplied clock on the production path was tried and reverted: a time a caller chooses is a throttle a caller can loosen.
 - **Guard tests.** Mutation-check every test that guards an invariant: break the code, watch the test fail, restore. Several guard tests here first passed under their mutants. Say in the test's comment what it does not cover.
 - **Bug fixes** carry a test that fails before the fix. The commit body opens with `BUG FIX` and names the commit that introduced the bug when known.

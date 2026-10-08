@@ -45,32 +45,6 @@ const (
 	loopbackHost = "127.0.0.1"
 )
 
-// shutdownContext returns a context carrying the given budget, cancelled when
-// the test ends.
-func shutdownContext(t *testing.T, budget time.Duration) context.Context {
-	t.Helper()
-
-	ctx, cancel := context.WithTimeout(context.Background(), budget)
-	t.Cleanup(cancel)
-	return ctx
-}
-
-// startHub runs a hub's event loop under cfg and returns once it is provably
-// serving requests, so no caller needs to sleep before using it. A nil cfg gives
-// the hub the defaults.
-func startHub(t *testing.T, cfg *server.Config) *server.Hub {
-	t.Helper()
-
-	hub := server.NewHub(cfg)
-	hub.Start()
-
-	// ClientCount is answered by the hub's run loop, so a reply proves the loop
-	// is up.
-	hub.ClientCount()
-
-	return hub
-}
-
 // testService is a real [server.Service] running on a real port under a context
 // the test cancels.
 type testService struct {

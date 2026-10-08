@@ -44,7 +44,8 @@ internal/server/
   types.go                  Message payloads exchanged over the wire
   close_errors.go           Tells ordinary connection teardown from a real fault
   message_json.go           The wire-format encoder, kept identical to encoding/json
-test/                       Unit and integration suites (see guides/testing.md)
+test/                       Integration suite and its helpers; unit tests sit beside the code
+                            as *_internal_test.go (see guides/testing.md)
 ```
 
 `internal/` means the packages cannot be imported by other modules — this is an application, not a

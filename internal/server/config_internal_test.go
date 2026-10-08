@@ -223,3 +223,21 @@ func TestNewConfigFromEnvWarnsOnInvalidValues(t *testing.T) {
 		})
 	}
 }
+
+// TestNewConfig tests the configuration creation function.
+// It verifies that NewConfig returns a properly initialized Config
+// struct with the expected default values.
+func TestNewConfig(t *testing.T) {
+	t.Parallel()
+
+	config := NewConfig()
+
+	if config == nil {
+		t.Fatal("NewConfig returned nil")
+	}
+
+	expectedPort := ":8080"
+	if config.Port != expectedPort {
+		t.Errorf("Expected default port %s, got %s", expectedPort, config.Port)
+	}
+}

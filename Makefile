@@ -98,10 +98,10 @@ test:
 	@echo "Running tests..."
 	go test -v -race ./...
 
-## test-unit: Run unit tests only
+## test-unit: Run unit tests only (the package-internal tests in ./internal/...)
 test-unit:
 	@echo "Running unit tests..."
-	go test -v -race ./test/unit/...
+	go test -v -race ./internal/...
 
 ## test-integration: Run integration tests only
 test-integration:
@@ -119,7 +119,7 @@ test-coverage:
 ## test-coverage-unit: Run unit tests with coverage report
 test-coverage-unit:
 	@echo "Running unit tests with coverage..."
-	go test -v -race -coverpkg=./cmd/...,./internal/... -coverprofile=unit-$(COVERAGE_FILE) ./test/unit/...
+	go test -v -race -coverpkg=./cmd/...,./internal/... -coverprofile=unit-$(COVERAGE_FILE) ./internal/...
 	go tool cover -html=unit-$(COVERAGE_FILE) -o unit-$(COVERAGE_HTML)
 	@echo "Unit test coverage report generated: unit-$(COVERAGE_HTML)"
 	go tool cover -func=unit-$(COVERAGE_FILE)

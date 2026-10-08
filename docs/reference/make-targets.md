@@ -47,7 +47,7 @@ DWARF data.
 | Target                       | What it does                                                     |
 | ---------------------------- | ---------------------------------------------------------------- |
 | `test`                       | `go test -v -race ./...`                                          |
-| `test-unit`                  | `./test/unit/...` only                                            |
+| `test-unit`                  | `./internal/...` only — the package-internal unit tests           |
 | `test-integration`           | `./test/integration/...` only                                     |
 | `test-coverage`              | All tests, including internal ones → `coverage.out` + `coverage.html` + a per-function summary |
 | `test-coverage-unit`         | Same, unit tests only → `unit-coverage.*`                         |

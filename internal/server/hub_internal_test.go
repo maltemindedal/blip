@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 )
@@ -56,28 +57,44 @@ func drain(f *fakeClient) (got [][]byte, closed bool) {
 	}
 }
 
-// startTestHub runs a hub's event loop and shuts it down when the test ends. It
-// returns once the loop is provably serving requests, so no caller has to sleep
-// before using the hub.
-func startTestHub(t *testing.T) *Hub {
+// hubShutdownBudget is the deadline every hub shutdown in these tests gets
+// unless it is deliberately testing a short one. It is generous because a
+// failing shutdown should report a real error, not a race against a slow
+// machine.
+const hubShutdownBudget = 5 * time.Second
+
+// startTestHub runs a hub's event loop under cfg and shuts it down when the test
+// ends. It returns once the loop is provably serving requests, so no caller has
+// to sleep before using the hub. A nil cfg gives the hub the defaults.
+func startTestHub(t *testing.T, cfg *Config) *Hub {
 	t.Helper()
 
-	h := NewHub(nil)
+	h := NewHub(cfg)
 	h.Start()
 
-	// ClientCount is answered by the run loop, so a reply proves it is up.
+	// ClientCount is answered by the run loop, so a reply proves it is up and has
+	// processed everything queued before this point.
 	h.ClientCount()
 
 	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-
-		if err := h.Shutdown(ctx); err != nil {
-			t.Errorf("failed to shut the hub down: %v", err)
+		if err := shutdownHub(t, h); err != nil {
+			t.Errorf(shutdownErrorMsg, err)
 		}
 	})
 
 	return h
+}
+
+const shutdownErrorMsg = "Failed to shutdown hub: %v"
+
+// shutdownHub shuts a hub down within hubShutdownBudget.
+func shutdownHub(t *testing.T, h *Hub) error {
+	t.Helper()
+
+	ctx, cancel := context.WithTimeout(context.Background(), hubShutdownBudget)
+	defer cancel()
+
+	return h.Shutdown(ctx)
 }
 
 // registerFake registers a fake client with an inbox buffer slots deep.
@@ -148,7 +165,7 @@ func BenchmarkHubBroadcast(b *testing.B) {
 func TestHubDropsClientWithAFullInbox(t *testing.T) {
 	t.Parallel()
 
-	h := startTestHub(t)
+	h := startTestHub(t, nil)
 	slow := registerFake(t, h, "slow", 1)
 	fast := registerFake(t, h, "fast", sendBufferSz)
 
@@ -184,7 +201,7 @@ func TestHubDropsClientWithAFullInbox(t *testing.T) {
 func TestHubBroadcastSkipsTheSender(t *testing.T) {
 	t.Parallel()
 
-	h := startTestHub(t)
+	h := startTestHub(t, nil)
 	sender := registerFake(t, h, "sender", sendBufferSz)
 	other := registerFake(t, h, "other", sendBufferSz)
 
@@ -206,7 +223,7 @@ func TestHubBroadcastSkipsTheSender(t *testing.T) {
 func TestHubBroadcastReachesEveryOtherClient(t *testing.T) {
 	t.Parallel()
 
-	h := startTestHub(t)
+	h := startTestHub(t, nil)
 
 	clients := make([]*fakeClient, 6)
 	for i := range clients {
@@ -242,7 +259,7 @@ func TestHubBroadcastReachesEveryOtherClient(t *testing.T) {
 func TestHubUnregisterOfAGoneClientIsANoOp(t *testing.T) {
 	t.Parallel()
 
-	h := startTestHub(t)
+	h := startTestHub(t, nil)
 	stays := registerFake(t, h, "stays", sendBufferSz)
 	leaves := registerFake(t, h, "leaves", sendBufferSz)
 	stranger := newFakeClient("stranger", sendBufferSz)
@@ -309,5 +326,274 @@ func TestHubRejectsClientWorkAfterShutdown(t *testing.T) {
 	case <-unregistered:
 	case <-time.After(time.Second):
 		t.Fatal("Unregister blocked on a stopped hub")
+	}
+}
+
+// publishAsync calls Publish on a goroutine of its own so a caller can tell a
+// rejected message from one that blocked: Publish returns on its own, but only
+// a select with a deadline proves it did.
+func publishAsync(hub *Hub, content string) <-chan bool {
+	accepted := make(chan bool, 1)
+	go func() {
+		accepted <- hub.Publish(BroadcastMessage{Payload: []byte(`{"content":"` + content + `"}`)})
+	}()
+
+	return accepted
+}
+
+// TestHubStartsWithNoClients verifies that a freshly started hub reports an
+// empty client set.
+func TestHubStartsWithNoClients(t *testing.T) {
+	t.Parallel()
+
+	hub := startTestHub(t, nil)
+
+	if count := hub.ClientCount(); count != 0 {
+		t.Errorf("Expected 0 clients on a new hub, got %d", count)
+	}
+}
+
+// TestHubAcceptsBroadcastWithNoClients verifies that broadcasting into an empty
+// hub is accepted and leaves the hub running.
+func TestHubAcceptsBroadcastWithNoClients(t *testing.T) {
+	t.Parallel()
+
+	hub := startTestHub(t, nil)
+
+	select {
+	case accepted := <-publishAsync(hub, "nobody home"):
+		if !accepted {
+			t.Fatal("Publish rejected a message on a running hub")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Publish did not accept a message")
+	}
+
+	// The reply proves the loop finished the broadcast and came back around.
+	if count := hub.ClientCount(); count != 0 {
+		t.Errorf("Expected 0 clients after an empty broadcast, got %d", count)
+	}
+}
+
+// TestHubHandlesConcurrentBroadcasts verifies that many goroutines can publish
+// at once without deadlocking the event loop.
+func TestHubHandlesConcurrentBroadcasts(t *testing.T) {
+	t.Parallel()
+
+	hub := startTestHub(t, nil)
+
+	const senders = 10
+	results := make([]<-chan bool, senders)
+	for i := range results {
+		results[i] = publishAsync(hub, "concurrent")
+	}
+
+	for _, result := range results {
+		select {
+		case accepted := <-result:
+			if !accepted {
+				t.Error("Publish rejected a message on a running hub")
+			}
+		case <-time.After(2 * time.Second):
+			t.Error("Publish blocked under concurrent senders")
+		}
+	}
+
+	if count := hub.ClientCount(); count != 0 {
+		t.Errorf("Expected 0 clients after concurrent broadcasts, got %d", count)
+	}
+}
+
+// TestHubShutdownStopsTheEventLoop verifies that Shutdown drains the hub and
+// leaves it reporting stopped.
+func TestHubShutdownStopsTheEventLoop(t *testing.T) {
+	t.Parallel()
+
+	hub := NewHub(nil)
+	hub.Start()
+	hub.ClientCount()
+
+	if hub.IsStopped() {
+		t.Fatal("Hub reported stopped while still running")
+	}
+
+	if err := shutdownHub(t, hub); err != nil {
+		t.Fatalf(shutdownErrorMsg, err)
+	}
+
+	if !hub.IsStopped() {
+		t.Error("Hub did not report stopped after Shutdown returned")
+	}
+}
+
+// TestHubShutdownBeforeStartIsNoOp verifies that shutting down a hub that never
+// ran succeeds instead of blocking on an event loop that does not exist.
+func TestHubShutdownBeforeStartIsNoOp(t *testing.T) {
+	t.Parallel()
+
+	hub := NewHub(nil)
+
+	if err := shutdownHub(t, hub); err != nil {
+		t.Errorf("Expected shutdown of an unstarted hub to succeed, got: %v", err)
+	}
+}
+
+// TestHubShutdownRightAfterStartStopsTheHub verifies that Shutdown called
+// straight after Start stops the event loop, instead of returning nil because
+// the loop's goroutine had not been scheduled yet and then leaving it running
+// for good. The hub is shut down at once, with no barrier in between, because
+// that is the case being pinned.
+func TestHubShutdownRightAfterStartStopsTheHub(t *testing.T) {
+	t.Parallel()
+
+	const rounds = 200
+
+	for range rounds {
+		hub := NewHub(nil)
+		hub.Start()
+
+		if err := shutdownHub(t, hub); err != nil {
+			t.Fatalf(shutdownErrorMsg, err)
+		}
+
+		if !hub.IsStopped() {
+			t.Fatal("Hub kept running after Shutdown returned straight after Start")
+		}
+	}
+}
+
+// TestHubStartTwiceRunsOneLoop verifies that Start is idempotent: repeated and
+// concurrent calls run a single event loop, which one Shutdown then stops. A
+// second loop would close the hub's done channel twice and panic.
+func TestHubStartTwiceRunsOneLoop(t *testing.T) {
+	t.Parallel()
+
+	hub := NewHub(nil)
+
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Go(hub.Start)
+	}
+	wg.Wait()
+	hub.Start()
+
+	if got := hub.ClientCount(); got != 0 {
+		t.Fatalf("Expected no clients on a fresh hub, got %d", got)
+	}
+
+	if err := shutdownHub(t, hub); err != nil {
+		t.Fatalf(shutdownErrorMsg, err)
+	}
+	if !hub.IsStopped() {
+		t.Error("Hub kept running after Shutdown")
+	}
+
+	if err := shutdownHub(t, hub); err != nil {
+		t.Errorf("Expected a second Shutdown to succeed, got: %v", err)
+	}
+}
+
+// TestHubShutdownIsIdempotent verifies that concurrent and repeated Shutdown
+// calls are safe and all report success.
+func TestHubShutdownIsIdempotent(t *testing.T) {
+	t.Parallel()
+
+	hub := NewHub(nil)
+	hub.Start()
+	hub.ClientCount()
+
+	const callers = 3
+	var wg sync.WaitGroup
+	wg.Add(callers)
+
+	errs := make(chan error, callers)
+	for range callers {
+		go func() {
+			defer wg.Done()
+			errs <- shutdownHub(t, hub)
+		}()
+	}
+
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		if err != nil {
+			t.Errorf("Concurrent shutdown returned an error: %v", err)
+		}
+	}
+
+	if err := shutdownHub(t, hub); err != nil {
+		t.Errorf("Shutdown after shutdown returned an error: %v", err)
+	}
+}
+
+// TestHubClientCountAfterShutdown verifies that ClientCount stops blocking once
+// the event loop has exited.
+func TestHubClientCountAfterShutdown(t *testing.T) {
+	t.Parallel()
+
+	hub := NewHub(nil)
+	hub.Start()
+	hub.ClientCount()
+
+	if err := shutdownHub(t, hub); err != nil {
+		t.Fatalf(shutdownErrorMsg, err)
+	}
+
+	done := make(chan int, 1)
+	go func() { done <- hub.ClientCount() }()
+
+	select {
+	case count := <-done:
+		if count != 0 {
+			t.Errorf("Expected 0 clients after shutdown, got %d", count)
+		}
+	case <-time.After(time.Second):
+		t.Error("ClientCount blocked after the hub stopped")
+	}
+}
+
+// TestHubPublishAfterShutdownIsRejected verifies that Publish loses the race
+// against shutdown by reporting rejection, rather than blocking forever on an
+// event loop that has stopped reading.
+func TestHubPublishAfterShutdownIsRejected(t *testing.T) {
+	t.Parallel()
+
+	hub := NewHub(nil)
+	hub.Start()
+	hub.ClientCount()
+
+	if err := shutdownHub(t, hub); err != nil {
+		t.Fatalf(shutdownErrorMsg, err)
+	}
+
+	select {
+	case accepted := <-publishAsync(hub, "too late"):
+		if accepted {
+			t.Error("Publish accepted a message on a stopped hub")
+		}
+	case <-time.After(time.Second):
+		t.Error("Publish blocked on a stopped hub")
+	}
+}
+
+// TestHubShutdownReturnsPromptlyWhenIdle verifies that Shutdown returns promptly
+// rather than blocking for its whole budget when there is nothing left to
+// drain.
+func TestHubShutdownReturnsPromptlyWhenIdle(t *testing.T) {
+	t.Parallel()
+
+	hub := NewHub(nil)
+	hub.Start()
+	hub.ClientCount()
+
+	// A budget this short is only met if Shutdown returns as soon as the event
+	// loop and the pumps are done, rather than waiting out a timer.
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	if err := hub.Shutdown(ctx); err != nil {
+		t.Errorf("Expected an idle hub to shut down within its budget, got: %v", err)
 	}
 }

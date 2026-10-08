@@ -4,41 +4,39 @@ How the suite is organized and how to run, extend, and measure it.
 
 ## Layout
 
-Almost all tests live under `test/`, outside the packages they exercise, so they see
-`internal/server` through its exported API only.
+Tests live in two places, split by whether they need a listening socket.
 
 ```
+internal/server/
+└── *_internal_test.go       # package server — unit tests and benchmarks, one file per source file
 test/
-├── unit/                    # package unit — components in isolation
+├── integration/             # package integration — a real Service over real sockets
+│   ├── setup_test.go            # shared plumbing: test services, dialing, assertions
 │   ├── error_handling_test.go   # read/write error paths, registration accounting
-│   ├── handlers_test.go         # health handler, routing
-│   ├── hub_test.go              # publish, client count, shutdown lifecycle
-│   └── websocket_test.go        # upgrader config, method and header validation
-├── integration/             # package integration — real servers over real sockets
-│   ├── setup_test.go            # shared plumbing: test servers, dialing, assertions
 │   ├── multiclient_test.go      # many clients exchanging messages concurrently
 │   ├── security_test.go         # origin validation, size limits, rate limiting
 │   ├── server_test.go           # health endpoint, full startup path
 │   ├── shutdown_test.go         # graceful shutdown, ordering, clients closed
 │   └── websocket_test.go        # connection lifecycle, broadcasting
-└── testhelpers/             # shared helpers (no tests of its own)
+└── testhelpers/             # helpers the integration suite shares (no tests of its own)
     └── helpers.go
 ```
 
-Integration tests run the real `server.Service` on an ephemeral loopback port, through
+**Unit tests** are package-internal: `x_internal_test.go` covers `x.go` and can reach the package's
+unexported code. The hub's lifecycle and fan-out, the handlers and routes, configuration, the wire
+encoder, the rate limiter, the origin policy and the write pump's framing are pinned there, with the
+benchmarks for the hot paths. None of them needs a socket: a handler is driven through
+`httptest.NewRecorder`, and a hub through `fakeClient`, below. So is the `*http.Server` that `New`
+builds — its address, its timeouts, and its header limit are the service's own, not a caller's.
+
+**Integration tests** run the real `server.Service` on an ephemeral loopback port, through
 `Service.Serve`, and dial it with a real `gorilla/websocket` client, so they exercise the actual
 handshake, origin check, and pumps. The lifecycle tests go further and start it through `Run` on a
-fixed port, driven the way `main` drives it.
+fixed port, driven the way `main` drives it. They see `internal/server` through its exported API
+only, which is what keeps them testing the service rather than a copy of it.
 
-The exception is `internal/server/*_internal_test.go`, which covers what the exported API cannot
-reach: the hot paths the benchmarks measure, the `*http.Server` that `New` builds — its address,
-its timeouts, and its header limit are the service's own, not a caller's — and anything that needs a
-client. `Hub.Register` and `Hub.Unregister` take `clientConn`, the hub's own view of a client, which
-only this package can name. `Hub.Publish` loses the same shutdown race and is tested from
-`test/unit`, where it belongs, because it needs no client at all.
-
-A fourth kind lives there too: checks on the package's own shape rather than on behaviour anyone
-outside can call. `TestResolveConfigPreservesEveryField` compares a resolved `Config` field for field
+Checks on the package's own shape, rather than on behaviour anyone outside can call, are unit tests
+too. `TestResolveConfigPreservesEveryField` compares a resolved `Config` field for field
 so a field added to the struct cannot be dropped in resolution unnoticed, and
 `rate_limiter_internal_test.go` holds `TestClockSeamIsTestOnly`, which parses the package's non-test
 sources to keep production off the rate limiter's clock seam. Neither is reachable from outside the
@@ -57,7 +55,7 @@ instead of hanging on a channel nobody will feed.
 
 ```bash
 make test                  # everything, with -race and -v
-make test-unit             # ./test/unit/... only
+make test-unit             # ./internal/... only — the package-internal tests
 make test-integration      # ./test/integration/... only
 make race                  # -race without -v
 ```
@@ -66,12 +64,12 @@ Plain Go:
 
 ```bash
 go test ./...                                   # everything
-go test -v -race ./test/unit/...                # one package
-go test -v -race -run TestHubShutdown ./test/unit  # one test
+go test -v -race ./internal/server                                        # one package
+go test -v -race -run '^TestHubShutdownIsIdempotent$' ./internal/server  # one test
 ```
 
-The integration suite takes roughly 1.5 seconds and the unit suite under a second, because both run
-their tests in parallel — each owns its hub, so there is no process state to serialize them. What is
+Each suite takes a few seconds with `-race` (about 2 for integration and 3 for `internal/server`,
+measured 2026-10-08), because both run their tests in parallel — each owns its hub, so there is no process state to serialize them. What is
 left is a handful of tests that wait on real timeouts, such as `TestWebSocketRateLimiting` waiting out
 a refill over a real socket. Always keep `-race` on — the hub and the client pumps are concurrent, and
 the suite now runs concurrently too.
@@ -88,20 +86,21 @@ These pass `-coverpkg=./cmd/...,./internal/...` so coverage is attributed to the
 rather than to the test packages, and print `go tool cover -func` at the end. Open `coverage.html`
 in a browser for the annotated source.
 
-`make test-coverage` measured **70.4% of statements** on 2026-07-24 (unit 56.6%, integration 61.1%).
-That figure spans `./cmd/...` and `./internal/...` together, and `cmd/server` has no tests of its
-own, so `internal/server` alone measures higher — 76.3% with `-coverpkg=./internal/...`. The same
+`make test-coverage` measured **82.4% of statements** on 2026-10-08 (unit 65.7%, integration 69.3%;
+integration varies by about a point from run to run). That figure spans `./cmd/...` and
+`./internal/...` together, and `cmd/server` has no tests of its own, so `internal/server` alone
+measures higher — 85.0% with `-coverpkg=./internal/...`. The same
 number appears in the [README](../../README.md#status); update both together. CI collects coverage
 and uploads it to Codecov but does not enforce a threshold — nothing fails a build for dropping
 coverage.
 
 ## Helpers
 
-`test/testhelpers` provides the shared plumbing. Use it instead of hand-rolling servers and dials:
+`test/testhelpers` provides the integration suite's shared plumbing. Use it instead of hand-rolling
+dials and requests:
 
 | Helper                                            | Purpose                                                             |
 | ------------------------------------------------- | ------------------------------------------------------------------- |
-| `CreateTestServer(t, build)`                      | `httptest` server whose handler is built from its own base URL, closed when the test ends |
 | `WaitFor(t, timeout, what, cond)`                 | Poll a condition to a deadline — use instead of `time.Sleep`         |
 | `WaitForServer(t, url, timeout)`                  | Block until a just-started server accepts requests                   |
 | `Dial(t, wsURL, origin)`                          | Dial a `ws://` URL from a given `Origin`, closed when the test ends  |
@@ -111,29 +110,27 @@ coverage.
 | `MakeRequest(t, method, url)`                     | HTTP request, fully read; returns a `Response` with the body closed  |
 | `AssertStatusCode` / `AssertContentType` / `AssertBody` | Common assertions over a `Response`                            |
 
-`CreateTestServer` takes a builder rather than a handler because the hub owns its configuration and
-usually has to allow the server's own origin — which means the config, and therefore the hub, has to
-exist before the handler does. The listener is opened first and its URL passed to `build`.
-
 The `integration` package layers its own helpers on top in `setup_test.go` — `newTestServer` (a
 real `server.Service` with a hub of its own, on an ephemeral port and the default settings),
-`newConfiguredTestServer` (the same, with a callback that varies the config first), `startService`
-(the same service started through `Run` on a fixed port, stopped by cancelling its context), `dial` / `dialPair` / `dialClients` (which return
-only once the hub has registered every connection), and `waitForUnregister`. Prefer those inside that
-package: they make client-count assertions exact.
+`newConfiguredTestServer` (the same, with a callback that varies the config first — the listener is
+opened before the service is built, so its own origin is already on the allow-list), `startService`
+(the same service started through `Run` on a fixed port, stopped by cancelling its context), `dial` /
+`dialPair` / `dialClients` (which return only once the hub has registered every connection), and
+`waitForUnregister`. Prefer those inside that package: they make client-count assertions exact.
 
 ## Writing tests
 
 Follow the conventions already in the suite:
 
 - Name tests `TestSubjectBehavior` — `TestWebSocketOriginValidation`, `TestHubShutdownTimeout`.
-- Put anything that needs a listening socket in `test/integration`, everything else in `test/unit`.
+- Put anything that needs a listening socket in `test/integration`, everything else in
+  `internal/server`, in the `_internal_test.go` file named after the file it covers.
 - Use table-driven subtests with `t.Run` for multiple scenarios of one behavior.
 - Cover the failure path, not just the happy one — most bugs in this codebase live in error handling
   and shutdown ordering.
-- Own your state, then run in parallel. Nothing configurable is process-wide: give a test its own hub
-  with `server.NewHub(cfg)` and `server.SetupRoutesWithHub`, or a whole service of its own with the
-  integration package's `newConfiguredTestServer`, so both the client counts and the settings it observes belong
+- Own your state, then run in parallel. Nothing configurable is process-wide: give a unit test its own
+  hub with `startTestHub(t, cfg)`, or an integration test a whole service of its own with
+  `newConfiguredTestServer`, so both the client counts and the settings it observes belong
   to it alone. A test that does that should call `t.Parallel()`. The one thing still shared by the
   process is the logger, so `TestShutdownStopsAcceptingBeforeDrainingClients` — which reads the
   shutdown ordering off `server.SetLogger` — stays serial. Fixed listen ports are fine in parallel as
