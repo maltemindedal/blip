@@ -81,8 +81,10 @@ message. Naming the seam therefore costs the broadcast path nothing: it measures
 1000 clients than dereferencing the channel out of each client did, because the channel now sits in
 the map next to the key instead of one pointer hop away in the client's own memory.
 
-Those channels are the hub's own, though — nothing outside it sends on them. What it exports is
-intent: `Register(ctx, client)`, `Unregister(client)`, and `Publish(msg)`. Each one owns the race a
+Those channels are the hub's own, though — nothing outside it sends on them. The one signal a client
+does need, that shutdown has begun, it reads through `stopping()`, which hands out the `shutdown`
+channel receive-only, so the compiler rather than convention keeps the client from closing or sending
+on it. What the hub exports is intent: `Register(ctx, client)`, `Unregister(client)`, and `Publish(msg)`. Each one owns the race a
 raw channel send would leave to its caller, because the run loop stops reading the moment shutdown
 is signalled: `Register` and `Publish` report `false` instead of blocking forever, and `Unregister`
 becomes a no-op. Registration additionally gives up when the request context is done, so a client
@@ -99,7 +101,7 @@ which is what makes it a usable synchronization barrier in tests.
 - *read pump* — reads frames, enforces the rate limit, normalizes the payload, and hands it to
   `Hub.Publish`. Exits on any read error and unregisters the client.
 - *write pump* — selects over the client's 256-message `send` channel, a 54-second ping ticker, and
-  the hub's shutdown channel. Coalesces anything already queued into the current frame, separated by
+  the hub's `stopping()` channel. Coalesces anything already queued into the current frame, separated by
   newlines, so a burst costs one frame rather than one per message.
 
 Splitting reads and writes is required by `gorilla/websocket`: at most one concurrent reader and one
@@ -140,8 +142,8 @@ seam costs neither — `newRateLimiterAt` inlines into its wrapper, `allow` is o
 the allow-list normalized to lowercase `scheme://host` in a lookup set, and whether it contained `*`.
 Everything about origins lives in that one type — reading the configured list, `*`, dropping invalid
 entries, and the check itself — so its rules are unit-tested over plain strings. The hub's resolved
-configuration holds it, and its `checkOrigin` is bound into the hub's own upgrader as `CheckOrigin`,
-so rejection happens before any connection resources are allocated. The check normalizes the
+configuration holds it, and its `checkOrigin` is bound as `CheckOrigin` into the upgrader that the
+hub's `/ws` handler builds, so rejection happens before any connection resources are allocated. The check normalizes the
 `Origin` header the same way, but headers that are already canonical — which is what browsers send
 — match the set directly and skip URL parsing entirely. A request with no `Origin` header is always
 rejected, even when the allow-list contains `*`.

@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
-
-	"github.com/gorilla/websocket"
 )
 
 // clientConn is everything the hub needs from a connected client, and nothing
@@ -50,10 +48,6 @@ type Hub struct {
 	// paths read it without synchronization.
 	cfg resolvedConfig
 
-	// upgrader is this hub's own, because its CheckOrigin closes over the
-	// hub's origin policy.
-	upgrader websocket.Upgrader
-
 	// clients maps every registered client to the inbox it was registered with.
 	// Keeping the channel here rather than asking the client for it per message
 	// is what keeps the fan-out free of interface dispatch.
@@ -85,7 +79,7 @@ type Hub struct {
 // runs under all come from it. A nil cfg means the defaults, which is what a
 // caller that does not care about any of them passes.
 func NewHub(cfg *Config) *Hub {
-	h := &Hub{
+	return &Hub{
 		cfg:        resolveConfig(cfg),
 		clients:    make(map[clientConn]chan<- []byte),
 		broadcast:  make(chan BroadcastMessage),
@@ -95,9 +89,6 @@ func NewHub(cfg *Config) *Hub {
 		shutdown:   make(chan struct{}),
 		done:       make(chan struct{}),
 	}
-
-	h.upgrader = newUpgrader(h.cfg.origins)
-	return h
 }
 
 // Register hands client to the hub's run loop, which adds it to the client set
@@ -161,6 +152,14 @@ func (h *Hub) ClientCount() int {
 	case <-h.done:
 		return 0
 	}
+}
+
+// stopping returns a channel that is closed once the hub begins shutting down.
+// A client goroutine that blocks on anything the shutdown must interrupt selects
+// on it. It is receive-only, so nothing outside the hub can close or send on the
+// channel the hub's own shutdown sequence depends on.
+func (h *Hub) stopping() <-chan struct{} {
+	return h.shutdown
 }
 
 // Start launches the hub event loop in a goroutine if it is not already running.

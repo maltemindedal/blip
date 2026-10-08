@@ -37,20 +37,19 @@ type Client struct {
 // hub reference, and client address. The client's send channel is buffered
 // to handle message queuing.
 //
-// The size limit and the rate limit come from the hub the client is joining,
-// which resolved them when it was built.
-func NewClient(conn *websocket.Conn, hub *Hub, addr string) *Client {
-	cfg := &hub.cfg
-	conn.SetReadLimit(cfg.MaxMessageSize)
-
+// maxMessageSize and rateLimit are the limits the connection runs under; the
+// caller passes the ones the hub resolved. Nothing here touches conn or hub, so
+// a test can build a client without either and still get the limiter and the
+// limits the read pump would, from the same arguments.
+func NewClient(conn *websocket.Conn, hub *Hub, addr string, maxMessageSize int64, rateLimit RateLimitConfig) *Client {
 	return &Client{
 		conn:           conn,
 		send:           make(chan []byte, sendBufferSz),
 		hub:            hub,
 		addr:           addr,
-		maxMessageSize: cfg.MaxMessageSize,
-		rateLimiter:    newRateLimiter(cfg.RateLimit.Burst, cfg.RateLimit.RefillInterval),
-		rateLimit:      cfg.RateLimit,
+		maxMessageSize: maxMessageSize,
+		rateLimiter:    newRateLimiter(rateLimit.Burst, rateLimit.RefillInterval),
+		rateLimit:      rateLimit,
 	}
 }
 
@@ -78,9 +77,12 @@ func (c *Client) serve() {
 	<-writeDone
 }
 
-// setupReadConnection configures read deadlines and the pong handler for the
-// WebSocket connection.
+// setupReadConnection configures the message size limit, read deadlines, and the
+// pong handler for the WebSocket connection. It runs on the read pump before the
+// first read, which is the only goroutine that reads.
 func (c *Client) setupReadConnection() {
+	c.conn.SetReadLimit(c.maxMessageSize)
+
 	if err := c.conn.SetReadDeadline(time.Now().Add(pongWait)); err != nil {
 		log().Warn("failed to set initial read deadline", "addr", c.addr, "error", err)
 	}
@@ -206,7 +208,7 @@ func (c *Client) processWriteEvent(ticker *time.Ticker) bool {
 		return c.handleMessage(message, ok)
 	case <-ticker.C:
 		return c.handlePing()
-	case <-c.hub.shutdown:
+	case <-c.hub.stopping():
 		return false
 	}
 }
