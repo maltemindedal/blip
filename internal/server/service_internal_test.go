@@ -149,10 +149,15 @@ func TestNewListensOnTheResolvedPort(t *testing.T) {
 	}
 }
 
-// TestRunDrainsTheHubWhenTheListenerFails pins that a listener failure does not
-// leave the hub's goroutines running behind it, and that the listen error stays
-// reachable through the error Run returns.
-func TestRunDrainsTheHubWhenTheListenerFails(t *testing.T) {
+// TestRunStartsNothingWhenItCannotListen pins that Run opens its listener before
+// starting anything: on a port it cannot bind, it returns the listen error with
+// the hub never started, so no goroutine is left running behind it, and the
+// error stays reachable through the one Run returns.
+//
+// A listener that fails while serving is a different path, through Serve's
+// drain; TestServeDrainsTheHubWhenTheListenerFails and
+// TestServeClosesOpenConnectionsWhenTheListenerFails cover it.
+func TestRunStartsNothingWhenItCannotListen(t *testing.T) {
 	t.Parallel()
 
 	occupied, err := net.Listen("tcp", "127.0.0.1:0")
@@ -175,14 +180,14 @@ func TestRunDrainsTheHubWhenTheListenerFails(t *testing.T) {
 	if runErr == nil {
 		t.Fatal("Expected Run to fail on an occupied port")
 	}
-	if !strings.HasPrefix(runErr.Error(), "http server: listen and serve: ") {
+	if !strings.HasPrefix(runErr.Error(), "http server: listen tcp ") {
 		t.Errorf("Unexpected error text %q", runErr)
 	}
 	if _, ok := errors.AsType[*net.OpError](runErr); !ok {
 		t.Errorf("Expected the listen error to stay reachable, got %v", runErr)
 	}
-	if !svc.Hub().IsStopped() {
-		t.Error("Expected the hub to be stopped after the listener failed")
+	if svc.Hub().started.Load() {
+		t.Error("Run started the hub although it could not listen")
 	}
 }
 
@@ -245,8 +250,9 @@ func (l *closeRecordingListener) Close() error {
 // listener to close, and the goroutine closes it only after Serve has returned.
 // That goroutine is scheduled at random, so the test runs the case many times.
 //
-// It reaches Run only through the lifecycle Run shares with Serve: Run's own
-// listener is opened inside ListenAndServe, where a test cannot observe it.
+// Run opens its listener and hands it to Serve, so this covers Run's listener
+// too, though not by calling Run: the listener Run opens is its own, where a
+// test cannot record its Close.
 func TestServeClosesItsListenerBeforeReturning(t *testing.T) {
 	t.Parallel()
 

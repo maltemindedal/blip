@@ -59,39 +59,37 @@ func (s *Service) Hub() *Hub {
 	return s.hub
 }
 
-// Run starts the hub and serves HTTP on the configured port until the listener
-// fails or ctx is done. A listener failure drains the HTTP server and the hub,
-// so nothing outlives the call, and is returned wrapped, joined with the
-// drain's error if that overran its budget. Cancelling ctx drains the service
-// and returns nil once it has stopped — the listener included — or the drain's
-// error if a stage overran its budget.
+// Run listens on the configured port and serves there as [Service.Serve] does.
+// If it cannot listen, it returns that error before starting anything, so there
+// is nothing to drain.
 func (s *Service) Run(ctx context.Context) error {
-	return s.run(ctx, s.httpServer.Addr, func() error {
-		if err := s.httpServer.ListenAndServe(); err != nil {
-			return fmt.Errorf("listen and serve: %w", err)
-		}
-		return nil
-	})
+	ln, err := net.Listen("tcp", s.httpServer.Addr)
+	if err != nil {
+		return fmt.Errorf("http server: %w", err)
+	}
+
+	// The configured address is the one logged, not ln's resolved form, so the
+	// startup line reads as it is configured: addr=:8080 rather than [::]:8080.
+	return s.serve(ctx, ln, s.httpServer.Addr)
 }
 
-// Serve is [Service.Run] on a listener the caller has already opened, in place
-// of the configured port; it closes ln before returning. It exists for a caller
-// that needs the address before the service is built — a test listening on an
-// ephemeral port, whose own origin has to be on the allow-list — and runs the
-// same lifecycle, drain included.
+// Serve starts the hub and serves HTTP on ln, which it closes before returning,
+// until ln fails or ctx is done. It exists for a caller that needs the address
+// before the service is built, such as a test listening on an ephemeral port
+// whose own origin has to be on the allow-list; [Service.Run] uses it too.
+//
+// A listener failure drains the HTTP server and the hub, so nothing outlives
+// the call, and is returned wrapped, joined with the drain's error if that
+// overran its budget. Cancelling ctx drains the service and returns nil once it
+// has stopped, or the drain's error if a stage overran its budget.
 func (s *Service) Serve(ctx context.Context, ln net.Listener) error {
-	return s.run(ctx, ln.Addr().String(), func() error {
-		if err := s.httpServer.Serve(ln); err != nil {
-			return fmt.Errorf("serve: %w", err)
-		}
-		return nil
-	})
+	return s.serve(ctx, ln, ln.Addr().String())
 }
 
-// run is the lifecycle [Service.Run] and [Service.Serve] share: start the hub,
-// serve on serve's goroutine, and drain on cancellation or a listener failure.
-// addr is only logged.
-func (s *Service) run(ctx context.Context, addr string, serve func() error) error {
+// serve is the lifecycle behind [Service.Serve]: start the hub, serve ln on a
+// goroutine of its own, and drain on cancellation or a listener failure. addr is
+// only logged.
+func (s *Service) serve(ctx context.Context, ln net.Listener, addr string) error {
 	s.hub.start()
 	log().Info("hub started and ready to manage WebSocket connections")
 
@@ -99,8 +97,8 @@ func (s *Service) run(ctx context.Context, addr string, serve func() error) erro
 	go func() {
 		log().Info("server listening", "addr", addr)
 
-		if err := serve(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			serverErrors <- err
+		if err := s.httpServer.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			serverErrors <- fmt.Errorf("serve: %w", err)
 			return
 		}
 
@@ -123,11 +121,11 @@ func (s *Service) run(ctx context.Context, addr string, serve func() error) erro
 
 		shutdownErr := s.shutdown()
 
-		// The serving goroutine may not have reached Serve or ListenAndServe
-		// when the drain ran, and Shutdown cannot close a listener it has not
-		// seen. Once Shutdown has run, both return ErrServerClosed as soon as
-		// they start, closing the listener on the way out, so this wait is
-		// short; it is what keeps the listener from outliving the call.
+		// The serving goroutine may not have reached http.Server.Serve when
+		// the drain ran, and Shutdown cannot close a listener it has not seen.
+		// Once Shutdown has run, Serve returns ErrServerClosed as soon as it
+		// starts, closing the listener on the way out, so this wait is short;
+		// it is what keeps the listener from outliving the call.
 		//
 		// The goroutine reports nil for that close. Anything else means the
 		// listener failed on its own before the shutdown reached it, and a

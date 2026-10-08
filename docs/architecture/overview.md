@@ -55,9 +55,10 @@ package comment on each file describes that file's slice of responsibility.
 ## Components
 
 **Service** (`service.go`) — the whole running server behind `New` and `Run`. `New(cfg)` builds the
-hub, the routes bound to it, and the `http.Server` that fronts them; `Run(ctx)` starts them on the
-configured port and drains them when `ctx` is cancelled. `Serve(ctx, ln)` is the same lifecycle on a
-listener the caller has already opened, for a caller that needs the address first. Nothing else is
+hub, the routes bound to it, and the `http.Server` that fronts them; `Serve(ctx, ln)` starts them on
+a listener and drains them when `ctx` is cancelled, and `Run(ctx)` opens that listener on the
+configured port and hands it to `Serve`. `Serve` is exported for a caller that needs the address
+before the service is built. Nothing else is
 exported from the lifecycle — the hub's own `start` and `shutdown` are unexported — so the shutdown
 ordering below cannot be got wrong by a caller, including a test, which is why the integration tests
 drive the real thing rather than a copy of it. What the package exports is that service, the
@@ -211,14 +212,16 @@ its messages being queued indefinitely.
 `Run`. It holds no lifecycle logic of its own, so the ordering below is reachable from a test.
 
 **Startup** (`New`, then `Run`): `New` hands the config to the hub, which resolves and keeps it,
-builds the mux, and constructs the `http.Server` with 15s read/write and 60s idle timeouts. `Run` starts the hub
-goroutine, calls `ListenAndServe` in a goroutine, and blocks on either a listener error or the
-context being done. A listener error runs the same two-stage drain as cancellation before `Run`
-returns it, so neither the hub nor a connection the server had already accepted outlives the call. `Serve` shares all of this; it only replaces `ListenAndServe` with
-`http.Server.Serve` on the caller's listener, which is how the integration tests run a real service
-on an ephemeral port whose origin they know before the service is built.
+builds the mux, and constructs the `http.Server` with 15s read/write and 60s idle timeouts. `Run`
+opens a listener on the configured port first; if it cannot, it returns that error before starting
+anything. It then hands the listener to `Serve`, which starts the hub goroutine, calls
+`http.Server.Serve` in a goroutine, and blocks on either a listener error or the context being done.
+A listener error runs the same two-stage drain as cancellation before `Serve` returns it, so neither
+the hub nor a connection the server had already accepted outlives the call. Calling `Serve`
+directly is how the integration tests run a real service on an ephemeral port whose origin they
+know before the service is built.
 
-**Shutdown**, on cancellation, in strict order with a 30-second overall cap. `Run` builds one
+**Shutdown**, on cancellation, in strict order with a 30-second overall cap. `Serve` builds one
 `context.Context` carrying that cap and derives a 15-second child for each stage, so a stage that
 overruns cannot borrow the other's budget:
 
@@ -229,11 +232,11 @@ overruns cannot borrow the other's budget:
    share the one 15-second deadline.
 
 The two errors are joined rather than short-circuited, so a hub that overran is still reported when
-the HTTP stage failed too. `Run` then waits for the goroutine that called `ListenAndServe` (or, for
-`Serve`, `http.Server.Serve`) to return: when cancellation comes before that goroutine has started
-serving, `http.Server.Shutdown` has no listener to close, and the listener would otherwise be
-closed only after `Run` had returned. If that goroutine reports that the listener had already failed
-on its own, `Run` returns that failure rather than letting the cancellation hide it.
+the HTTP stage failed too. `Serve` then waits for the goroutine that called `http.Server.Serve` to
+return: when cancellation comes before that goroutine has started serving, `http.Server.Shutdown`
+has no listener to close, and the listener would otherwise be closed only after `Serve` had
+returned. If that goroutine reports that the listener had already failed on its own, `Serve` returns
+that failure rather than letting the cancellation hide it.
 
 The `quit` channel appears in every blocking select in the codebase — inside `register`,
 `unregister`, and `publish`, and in the write pump's own event loop — so nothing can block shutdown
@@ -241,12 +244,12 @@ by waiting on a channel nobody will read.
 
 ## Concurrency model
 
-| Goroutine         | Count            | Lifetime                      | Started by                                                                |
-| ----------------- | ---------------- | ----------------------------- | ------------------------------------------------------------------------- |
-| Hub run loop      | 1                | Process lifetime              | `Hub.start`                                                               |
-| Client read pump  | 1 per connection | Until read error or shutdown  | Hub run loop, via `serve`                                                 |
-| Client write pump | 1 per connection | Until send closed or shutdown | `wsClient.serve`                                                          |
-| HTTP serving      | 1                | Process lifetime              | `Service.Run` (`ListenAndServe`) or `Service.Serve` (`http.Server.Serve`) |
+| Goroutine         | Count            | Lifetime                      | Started by                                 |
+| ----------------- | ---------------- | ----------------------------- | ------------------------------------------ |
+| Hub run loop      | 1                | Process lifetime              | `Hub.start`                                |
+| Client read pump  | 1 per connection | Until read error or shutdown  | Hub run loop, via `serve`                  |
+| Client write pump | 1 per connection | Until send closed or shutdown | `wsClient.serve`                           |
+| HTTP serving      | 1                | Process lifetime              | `Service.Serve`, which `Service.Run` calls |
 
 Roughly two goroutines and a 256-message buffer per connection. Only the first of the two is the
 hub's to launch and to wait on; the second belongs to the client, which is why `serve` does not
