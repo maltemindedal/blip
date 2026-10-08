@@ -67,11 +67,7 @@ func TestHealthHandlerUnit(t *testing.T) {
 func TestHTTPMethodsUnit(t *testing.T) {
 	t.Parallel()
 
-	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		if _, err := w.Write([]byte(expectedHealthResponse)); err != nil {
-			t.Errorf("Failed to write response: %v", err)
-		}
-	})
+	handler := http.HandlerFunc(healthHandler)
 
 	methods := []string{"GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"}
 
@@ -99,9 +95,8 @@ func testHTTPMethod(t *testing.T, handler http.HandlerFunc, method string) {
 			method, status, http.StatusOK)
 	}
 
-	// For our simple handler, all methods return the same response
-	// Note: In a real implementation, HEAD would typically not include a body
-	// but our test handler is simplified
+	// healthHandler answers every method alike. A real server drops the body of
+	// a HEAD response, so only the status is asserted for HEAD.
 	if method != "HEAD" {
 		expected := expectedHealthResponse
 		if rr.Body.String() != expected {
@@ -215,26 +210,45 @@ func TestWebSocketHandlerContentType(t *testing.T) {
 	}
 }
 
-// TestWebSocketUpgraderConfiguration tests that the upgrader is properly configured.
-// It verifies that requests with proper WebSocket headers are handled appropriately,
-// either succeeding with a protocol switch or failing with an appropriate error.
-func TestWebSocketUpgraderConfiguration(t *testing.T) {
+// TestNewUpgraderAppliesTheHubsSettings pins the upgrader each hub's /ws handler
+// builds, as docs/reference/configuration.md documents it: 1024-byte read and
+// write buffers, write buffers drawn from the pool every connection shares, and
+// CheckOrigin bound to the hub's origin policy. A nil CheckOrigin would not fail
+// closed: gorilla/websocket would fall back to checkSameOrigin, which accepts a
+// handshake that carries no Origin header at all.
+//
+// It does not drive a handshake; TestHubsCarryTheirOwnOriginPolicy and the
+// integration suite do.
+func TestNewUpgraderAppliesTheHubsSettings(t *testing.T) {
 	t.Parallel()
 
-	// Create a GET request with proper WebSocket headers
-	req := httptest.NewRequest(http.MethodGet, "/ws", nil)
-	req.Header.Set("Connection", "Upgrade")
-	req.Header.Set("Upgrade", "websocket")
-	req.Header.Set("Sec-WebSocket-Version", "13")
-	req.Header.Set("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+	policy, _ := newOriginPolicy([]string{"https://chat.example.com"})
+	upgrader := newUpgrader(policy)
 
-	w := serveWebSocket(t, req)
+	if upgrader.ReadBufferSize != 1024 || upgrader.WriteBufferSize != 1024 {
+		t.Errorf("buffers are %d bytes to read and %d to write, want 1024 each",
+			upgrader.ReadBufferSize, upgrader.WriteBufferSize)
+	}
+	if upgrader.WriteBufferPool != writeBufferPool {
+		t.Error("upgrader does not draw write buffers from the shared pool")
+	}
+	if upgrader.CheckOrigin == nil {
+		t.Fatal("upgrader has no CheckOrigin, so gorilla/websocket would apply its own same-host check")
+	}
 
-	resp := w.Result()
-	defer func() { _ = resp.Body.Close() }()
+	for origin, want := range map[string]bool{
+		"https://chat.example.com": true,
+		"https://evil.example":     false,
+		"":                         false,
+	} {
+		req := httptest.NewRequest(http.MethodGet, "/ws", nil)
+		if origin != "" {
+			req.Header.Set("Origin", origin)
+		}
 
-	if resp.StatusCode != http.StatusSwitchingProtocols && resp.StatusCode < 400 {
-		t.Errorf("Expected either status 101 or an error status (>=400), got %d", resp.StatusCode)
+		if got := upgrader.CheckOrigin(req); got != want {
+			t.Errorf("CheckOrigin with Origin %q = %v, want %v", origin, got, want)
+		}
 	}
 }
 
