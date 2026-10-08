@@ -139,6 +139,10 @@ func newConfiguredTestServer(t *testing.T, customize func(cfg *server.Config)) (
 	if err != nil {
 		t.Fatalf("Failed to listen: %v", err)
 	}
+	// Serve closes ln once it runs, but a customize that fails the test, or a
+	// New that panics, stops this function before Serve is reached. Closing a
+	// listener twice is harmless.
+	t.Cleanup(func() { _ = ln.Close() })
 	addr := ln.Addr().String()
 
 	cfg := server.NewConfig()
