@@ -19,7 +19,7 @@ Each step prints `PASS`/`FAIL`/`SKIP` lines and ends with `RESULT: PASS`, `RESUL
 
 ## Doctor
 
-`verify.sh doctor` is read-only. It checks that `go env GOVERSION` satisfies `go.mod` (1.26.8; `GOTOOLCHAIN=auto` downloads it), that `curl` is present, and that CI's `golangci-lint` is in `$(go env GOPATH)/bin`, where `make install-tools` puts it. It also reports whether this run's server is up.
+`verify.sh doctor` is read-only. It checks that `go env GOVERSION` satisfies `go.mod` (`GOTOOLCHAIN=auto` downloads the right version), that `curl` is present, and that CI's `golangci-lint` is in `$(go env GOPATH)/bin`, where `make install-tools` puts it. It also reports whether this run's server is up.
 
 ## Drive
 
