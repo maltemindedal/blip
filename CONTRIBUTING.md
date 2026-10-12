@@ -7,7 +7,7 @@ Everyone taking part in this project is expected to follow the [code of conduct]
 
 ## Development setup
 
-Prerequisites: Go 1.26.8 or later, Git, and optionally GNU Make.
+Prerequisites: Go 1.26.9 or later, Git, and optionally GNU Make.
 
 ```bash
 git clone https://github.com/maltemindedal/blip.git

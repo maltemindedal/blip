@@ -63,7 +63,7 @@ on the host side with `-p 9090:8080` instead.
 
 ## What the image contains
 
-**Build stage** — `golang:1.26.8-alpine`, compiles with `CGO_ENABLED=0 -trimpath -ldflags="-s -w"`
+**Build stage** — `golang:1.26.9-alpine`, compiles with `CGO_ENABLED=0 -trimpath -ldflags="-s -w"`
 for a static, stripped binary. `GOOS` and `GOARCH` come from buildx's `TARGETOS`/`TARGETARCH`
 arguments, defaulting to `linux/amd64`.
 
