@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Drive Blip the way two WebSocket clients do and keep the evidence.
-# Usage: verify.sh <doctor|build|test|lint|launch|health|relay|stop|cleanup|all>
+# Usage: verify.sh <doctor|build|test|lint|vuln|launch|health|relay|stop|cleanup|all>
 set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -62,6 +62,15 @@ lint() {
   expect "golangci-lint exits 0" "$ART/lint.exit" "^0$"
 }
 
+# CI's govulncheck job. Uses whichever govulncheck is on PATH or in GOPATH/bin (the cloud install
+# and make install-tools put CI's pinned version there); network needed for the vuln database.
+vuln() {
+  local gv; gv="$(command -v govulncheck || echo "$(go env GOPATH)/bin/govulncheck")"
+  [ -x "$gv" ] || { echo "  SKIP vuln: no govulncheck (CI pins its version in .github/workflows/ci.yml)"; SKIPPED=1; return; }
+  run vuln "$gv" ./... || FAILED=1
+  expect "govulncheck exits 0" "$ART/vuln.exit" "^0$"
+}
+
 launch() {
   if [ -s "$ART/server.pid" ] && kill -0 "$(cat "$ART/server.pid")" 2>/dev/null; then echo "  FAIL a server from this run is already up; run stop first"; FAILED=1; return 1; fi
   [ -x "$BIN" ] || build || { FAILED=1; return 1; }
@@ -121,13 +130,14 @@ case "$STEP" in
   build) build || FAILED=1 ;;
   test) test_go ;;
   lint) lint ;;
+  vuln) vuln ;;
   launch) launch ;;
   health) health ;;
   relay) relay ;;
   stop) stop ;;
   cleanup) cleanup ;;
   all)
-    if doctor; then test_go; lint; launch && { health; relay; }; else FAILED=1; echo "  doctor failed: not driving this checkout"; fi
+    if doctor; then test_go; lint; vuln; launch && { health; relay; }; else FAILED=1; echo "  doctor failed: not driving this checkout"; fi
     cleanup ;;
   *) sed -n '2,3p' "$0"; exit 2 ;;
 esac

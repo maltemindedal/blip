@@ -62,6 +62,12 @@ The lifecycle tests in `test/integration` listen on fixed ports 127.0.0.1:18082-
 
 - `verify-blip` launches its own server on a free loopback port, relays a message between two real WebSocket clients, checks Origin refusal, `/` and `/test`, and runs the race tests and lint. Run `.agents/skills/verify-blip/scripts/verify.sh all` and read its exit status. Evidence goes to `/tmp/blip-verify/<run>/`.
 
+## Cursor Cloud specific instructions
+
+- `.cursor/environment.json` installs the pinned toolchain and links it into `/usr/local/bin`: `go` and `gofmt` (version from the `go` line in `go.mod`), `golangci-lint` (the `version:` under the `golangci-lint-action` step in `.github/workflows/ci.yml`) and `govulncheck` (the `govulncheck@v…` in the same file).
+- The gate is `.agents/skills/verify-blip/scripts/verify.sh all`: race tests, lint, govulncheck, then a live server relay. Done means its last line is `RESULT: PASS (all)`.
+- To bump a tool, change only `go.mod` or `.github/workflows/ci.yml`; the install reads its versions from there. Never hard-code a version in `environment.json`.
+
 ## Docs
 
 - Before changing anything a client observes (message format, close behaviour, limits), read `docs/reference/api.md`.

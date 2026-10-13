@@ -8,7 +8,7 @@ description: Drive Blip (single-binary Go WebSocket relay) the way two browser t
 Users touch Blip through `/ws` (WebSocket JSON `{"content":...}`), `/` (health) and `/test` (browser page). Everything goes through one helper:
 
 ```sh
-.agents/skills/verify-blip/scripts/verify.sh <doctor|build|test|lint|launch|health|relay|stop|cleanup|all>
+.agents/skills/verify-blip/scripts/verify.sh <doctor|build|test|lint|vuln|launch|health|relay|stop|cleanup|all>
 ```
 
 Each step prints `PASS`/`FAIL`/`SKIP` lines and ends with `RESULT: PASS`, `RESULT: PASS with SKIP` or `RESULT: FAIL`. The exit code is 0 unless something failed. A SKIP still means that step is unverified.
@@ -25,6 +25,7 @@ Each step prints `PASS`/`FAIL`/`SKIP` lines and ends with `RESULT: PASS`, `RESUL
 
 - `test` runs `go test -race -shuffle=on ./...`, CI's test command, and requires exit 0 with no FAIL lines.
 - `lint` runs `$(go env GOPATH)/bin/golangci-lint run --timeout=10m`. It SKIPs without that binary. A preinstalled lint built with an older Go refuses this module (AGENTS.md).
+- `vuln` runs `govulncheck ./...` (CI's govulncheck job) with the govulncheck on PATH or in `$(go env GOPATH)/bin`. It SKIPs without one and needs network for the vulnerability database.
 - `health` requires `GET /` to return 200 and `GET /test` to return `text/html`.
 - `relay` runs `go run ./.agents/skills/verify-blip/wsclient`, a real gorilla/websocket client.
   - A handshake without `Origin` gets 403.
@@ -32,7 +33,7 @@ Each step prints `PASS`/`FAIL`/`SKIP` lines and ends with `RESULT: PASS`, `RESUL
   - The sender sends `{"content":"<hi> & bye","extra":1}`, and the receiver gets exactly `{"content":"\u003chi\u003e \u0026 bye"}`.
   - The sender gets nothing back.
   - The server log shows `client registered ... total_clients=2`.
-- `all` runs doctor, test, lint, launch, health, relay and cleanup. It stops after doctor if doctor fails.
+- `all` runs doctor, test, lint, vuln, launch, health, relay and cleanup. It stops after doctor if doctor fails.
 
 Go tooling skips directories that start with `.`, so `wsclient` is not part of `./...`. It adds no dependency and is invisible to build, test, lint, `go mod tidy` and govulncheck.
 
