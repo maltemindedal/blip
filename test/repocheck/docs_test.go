@@ -31,15 +31,20 @@ func TestDocIdentifiersExist(t *testing.T) {
 		}
 	}
 	ref := regexp.MustCompile("`((?:Test|Benchmark)[A-Z]\\w*|[A-Z]\\w*\\()")
+	seen := 0
 	for _, f := range markdownFiles(t) {
 		eachLine(readFile(t, f), func(n int, line string) {
 			for _, m := range ref.FindAllStringSubmatch(line, -1) {
+				seen++
 				name := strings.TrimSuffix(m[1], "(")
 				if !declared[name] && !slices.Contains(docExamples, name) {
 					t.Errorf("%s:%d names `%s`, which no .go file declares. Edit %s to the identifier's current name, or delete the sentence.", f, n, name, f)
 				}
 			}
 		})
+	}
+	if seen == 0 {
+		t.Fatal("found no identifier references in any .md file; the pattern no longer matches how the docs cite code")
 	}
 }
 
@@ -133,6 +138,9 @@ func TestAlertTableMatchesLogCalls(t *testing.T) {
 func TestDocsQuoteLogMsgsExactly(t *testing.T) {
 	t.Parallel()
 	calls := codeLogCalls(t)
+	if len(calls) == 0 {
+		t.Fatal("found no slog calls with a constant msg; codeLogCalls no longer matches how the code logs")
+	}
 	span := regexp.MustCompile("`([^`\n]+)`")
 	for _, f := range markdownFiles(t) {
 		eachLine(readFile(t, f), func(n int, line string) {

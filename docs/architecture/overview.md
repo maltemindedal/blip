@@ -239,7 +239,7 @@ for it to return or for the context to be done. Whichever happens, the same stat
 drain stage runs, in order, and `supervise` waits for the serving function before it returns. So a
 failure to listen, a listener that fails while serving, and a cancellation all drain the HTTP server
 and then the hub, and neither the hub nor a connection the server had already accepted outlives the
-call. `Service.serve` holds no `select` and no branch. A new exit cannot skip a stage, and a stage
+call. `Service.serve` holds no `select` and no branch on how serving ended. A new exit cannot skip a stage, and a stage
 added to the list is drained on every exit. `TestSuperviseDrainsOnEveryExit` runs each way serving
 can end against the same assertions. Because failing to listen takes the same path, `Run` on a port
 it cannot bind logs the hub start and the drain lines before it returns the listen error.

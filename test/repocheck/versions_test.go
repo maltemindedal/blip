@@ -30,15 +30,22 @@ func TestGoVersionAgreesWithGoMod(t *testing.T) {
 		t.Fatal("go.mod has no `go` line")
 	}
 	want := m[1]
+	inDockerfile := 0
 	for _, f := range textFiles(t, "Dockerfile") {
 		eachLine(readFile(t, f), func(n int, line string) {
 			for _, mm := range goVersionMention.FindAllStringSubmatch(line, -1) {
+				if f == "Dockerfile" {
+					inDockerfile++
+				}
 				if got := mm[1] + mm[2]; got != want {
 					t.Errorf("%s:%d says Go %s but go.mod says %s. Edit %s to %s; go.mod is the source (AGENTS.md: Docs mirror code, Go version).",
 						f, n, got, want, f, want)
 				}
 			}
 		})
+	}
+	if inDockerfile == 0 {
+		t.Errorf("Dockerfile names no Go version this check can read. Keep the builder as `FROM golang:%s-alpine`, a literal tag, so a stale version fails here.", want)
 	}
 }
 
