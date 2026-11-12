@@ -167,7 +167,7 @@ func TestWebSocketHandlerContentType(t *testing.T) {
 func TestNewUpgraderAppliesTheHubsSettings(t *testing.T) {
 	t.Parallel()
 
-	policy, _ := newOriginPolicy([]string{"https://chat.example.com"})
+	policy := newOriginPolicy([]string{"https://chat.example.com"})
 	upgrader := newUpgrader(policy)
 
 	if upgrader.ReadBufferSize != 1024 || upgrader.WriteBufferSize != 1024 {

@@ -22,7 +22,6 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/maltemindedal/blip/internal/server"
-	"github.com/maltemindedal/blip/test/testhelpers"
 )
 
 const (
@@ -87,7 +86,7 @@ func startService(t *testing.T, port string) *testService {
 	svcTest := launch(svc, addr, svc.Run)
 	t.Cleanup(func() { _ = svcTest.shutdown(t) })
 
-	testhelpers.WaitForServer(t, svcTest.URL()+"/", shutdownBudget)
+	waitForServer(t, svcTest.URL()+"/", shutdownBudget)
 	return svcTest
 }
 
@@ -127,11 +126,6 @@ func newTestServer(t *testing.T) (*testService, *server.Hub) {
 // newConfiguredTestServer starts a real service on an ephemeral loopback port,
 // configured by customize, so both the client counts and the settings a test
 // observes belong to that test alone. It is stopped when the test ends.
-//
-// The hub owns its configuration, so that configuration has to exist before the
-// service does: the listener is opened first and its URL is already on the
-// allow-list when customize runs. A customize that replaces AllowedOrigins
-// outright is testing the allow-list itself, and overrides that.
 func newConfiguredTestServer(t *testing.T, customize func(cfg *server.Config)) (*testService, *server.Hub) {
 	t.Helper()
 
@@ -159,10 +153,8 @@ func newConfiguredTestServer(t *testing.T, customize func(cfg *server.Config)) (
 		}
 	})
 
-	// ClientCount is answered by the hub's run loop, so a reply proves Serve has
-	// started it; the listener is already open, so dials queue until it accepts.
-	svc.Hub().ClientCount()
-
+	// No wait is needed before returning: New started the hub, and the listener
+	// is already open, so dials queue until Serve accepts them.
 	return svcTest, svc.Hub()
 }
 
@@ -191,10 +183,10 @@ func dialClients(t *testing.T, hub *server.Hub, wsURL, origin string, n int) []*
 
 	conns := make([]*websocket.Conn, n)
 	for i := range conns {
-		conns[i] = testhelpers.Dial(t, wsURL, origin)
+		conns[i] = dialUnregistered(t, wsURL, origin)
 	}
 
-	testhelpers.WaitFor(t, registerWait, "the hub to register every client", func() bool {
+	waitFor(t, registerWait, "the hub to register every client", func() bool {
 		return hub.ClientCount() >= before+n
 	})
 
@@ -205,7 +197,7 @@ func dialClients(t *testing.T, hub *server.Hub, wsURL, origin string, n int) []*
 func waitForUnregister(t *testing.T, hub *server.Hub, want int) {
 	t.Helper()
 
-	testhelpers.WaitFor(t, registerWait, "the hub to unregister a client", func() bool {
+	waitFor(t, registerWait, "the hub to unregister a client", func() bool {
 		return hub.ClientCount() == want
 	})
 }

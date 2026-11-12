@@ -31,8 +31,9 @@ See [Deploying to production](../guides/deploying-to-production.md).
 ```
 cmd/server/main.go          Entry point: logger, config, signal handling, Service.Run
 internal/server/
-  service.go                The service lifecycle: build, run, and drain in order
-  config.go                 Env parsing, defaults, sanitization, the resolved config a hub owns
+  service.go                The service: what it builds, what serving means, what it drains
+  lifecycle.go              supervise: the one exit path, which runs every drain stage
+  config.go                 Env parsing, defaults, and the resolved settings a hub runs under
   logging.go                Structured log/slog logger and LOG_LEVEL handling
   routes.go                 ServeMux wiring for /, /ws, /test
   handlers.go               Upgrade handler, health handler, embedded test page
@@ -54,28 +55,33 @@ package comment on each file describes that file's slice of responsibility.
 
 ## Components
 
-**Service** (`service.go`) — the whole running server behind `New` and `Run`. `New(cfg)` builds the
-hub, the routes bound to it, and the `http.Server` that fronts them; `Serve(ctx, ln)` starts them on
-a listener and drains them when `ctx` is cancelled, and `Run(ctx)` opens that listener on the
-configured port and hands it to `Serve`. `Serve` is exported for a caller that needs the address
+**Service** (`service.go`) — the whole running server behind `New` and `Run`. `New(cfg)` starts the
+hub and builds the routes bound to it and the `http.Server` that fronts them; `Serve(ctx, ln)` serves
+on a listener and drains the service however serving ends, and `Run(ctx)` does the same on a listener it
+opens on the configured port. `Serve` is exported for a caller that needs the address
 before the service is built. Nothing else is
-exported from the lifecycle — the hub's own `start` and `shutdown` are unexported — so the shutdown
+exported from the lifecycle — the hub's own `startHub` and `shutdown` are unexported — so the shutdown
 ordering below cannot be got wrong by a caller, including a test, which is why the integration tests
 drive the real thing rather than a copy of it. What the package exports is that service, the
 `Config` it is built from, the logger setup `main` calls, the `Message` wire type, the
 `HealthResponse` body that `/` serves, and, through `Service.Hub()`, two read-only views of the hub
 (`ClientCount`, `IsStopped`) for tests to observe. `Hub` has no exported constructor: its zero value
-is unusable, so the only working one is the one `Service.Hub()` returns, and even that one's
-`ClientCount` blocks until `Run` or `Serve` has started its run loop.
+is unusable, so the only working one is the one `Service.Hub()` returns, which is running from the
+moment `New` returns. `Run` or `Serve` is what stops it, so a `Service` that is built and never run
+leaves its hub's goroutine behind.
 
-**Hub** (`hub.go`) — owns the set of connected clients and the configuration they run under.
-`newHub(cfg)` resolves the configuration once and keeps it, so the origin allow-list, the message
-size limit, and the rate limit belong to that hub rather than to the process. `start()` launches a
-single goroutine — the hub's run loop — which selects over five channels: `registerReq`,
-`unregisterReq`, `broadcast`, `countReq`, and `quit`.
+**Hub** (`hub.go`) — owns the set of connected clients and the settings they run under.
+`startHub(s)` is the only constructor. It keeps the resolved settings it is given, so the origin
+allow-list, the message size limit, and the rate limit belong to that hub rather than to the
+process, and it launches a single goroutine — the hub's run loop — before it returns. A hub
+therefore has two states, running and stopped, and `shutdown` is the only transition: there is no
+built-but-unstarted hub to forget to start or to shut down too early. The run loop selects over
+five channels: `registerReq`, `unregisterReq`, `broadcast`, `countReq`, and `quit`.
 
-That goroutine is the *sole* owner of the client map: registration, unregistration, fan-out, and
-shutdown all happen inside the run loop, so the map needs no lock at all. Broadcasts iterate the map
+That goroutine is the *sole* owner of the client map, and the code says so: the map lives in a
+`registry` held in a local variable of the run loop, not in a field of `Hub`, so no other function
+can name it. Registration, unregistration, fan-out, and shutdown all happen inside the run loop, so
+the map needs no lock at all. Broadcasts iterate the map
 directly instead of copying it, and the slice of failed clients is scratch space reused across
 messages, which makes the fan-out path allocation-free. The rule that keeps this sound is simple:
 every mutation of the client set must arrive through one of the hub's channels.
@@ -152,19 +158,26 @@ seam costs neither — `newRateLimiterAt` inlines into its wrapper, `allow` is o
 **Origin validation** (`origin.go`) — an `originPolicy`, built once when the hub is constructed:
 the allow-list normalized to lowercase `scheme://host` in a lookup set, and whether it contained `*`.
 Everything about origins lives in that one type — reading the configured list, `*`, dropping invalid
-entries, and the check itself — so its rules are unit-tested over plain strings. The hub's resolved
-configuration holds it, and its `checkOrigin` is bound as `CheckOrigin` into the upgrader that the
+entries, and the check itself — so its rules are unit-tested over plain strings. The policy is the
+only record of the allow-list: the hub's settings hold it and no second list beside it, so nothing
+can report an allow-list other than the one enforced. Its `checkOrigin` is bound as `CheckOrigin` into the upgrader that the
 hub's `/ws` handler builds, so rejection happens before any connection resources are allocated. The check normalizes the
 `Origin` header the same way, but headers that are already canonical — which is what browsers send
 — match the set directly and skip URL parsing entirely. A request with no `Origin` header is always
 rejected, even when the allow-list contains `*`.
 
 **Config** (`config.go`) — parsed from the environment at startup into a `Config`, then resolved once
-by `newHub`: defaults substituted for anything invalid, the allow-list normalized into a lookup set.
-The result is a value the hub owns and never mutates, so readers on the connection path need neither
-a lock nor an atomic load, and two hubs in one process can be configured differently. The caller's
-`Config` is copied on the way in, so changing it afterwards cannot change a running hub. Invalid
-values never abort startup; they log and fall back.
+by `New`, through `resolveConfig`, into `settings`: defaults substituted for anything invalid, the
+allow-list turned into an `originPolicy`. The raw `Config` stops there. `settings` is a separate type
+that does not embed it, and `New` passes only the settings on, so code past `New` cannot read a raw
+value where a resolved one is meant. `TestRawConfigStopsAtTheBoundary` parses the package and fails
+if production code outside `config.go` names `Config` anywhere but `New`'s parameter, or if `New`
+does anything with that parameter but resolve it. `TestEveryConfigFieldReachesTheSettings` fails for
+a `Config` field that `resolveConfig` does not read. The hub owns its settings and never mutates
+them, so readers on the connection path need neither a lock nor an atomic load, and two hubs in one
+process can be configured differently. Nothing in the settings aliases the caller's `Config`, so
+changing it afterwards cannot change a running hub. Invalid values never abort startup; they log and
+fall back.
 
 **Logging** (`logging.go`) — a single `log/slog` logger shared by the package, its level read from
 `LOG_LEVEL`. Per-message records are emitted at debug level behind a `debugEnabled()` check, so at
@@ -213,19 +226,27 @@ its messages being queued indefinitely.
 `main` supplies the logger, the config, and a context cancelled on `SIGINT`/`SIGTERM`, then calls
 `Run`. It holds no lifecycle logic of its own, so the ordering below is reachable from a test.
 
-**Startup** (`New`, then `Run`): `New` hands the config to the hub, which resolves and keeps it,
+**Startup** (`New`, then `Run`): `New` resolves the config, starts the hub under the settings,
 builds the mux, and constructs the `http.Server` with 15s read/write and 60s idle timeouts. `Run`
-opens a listener on the configured port first; if it cannot, it returns that error before starting
-anything. It then hands the listener to `Serve`, which starts the hub goroutine, calls
-`http.Server.Serve` in a goroutine, and blocks on either a listener error or the context being done.
-A listener error runs the same two-stage drain as cancellation before `Serve` returns it, so neither
-the hub nor a connection the server had already accepted outlives the call. Calling `Serve`
-directly is how the integration tests run a real service on an ephemeral port whose origin they
-know before the service is built.
+and `Serve` both go through one unexported `serve`, which calls `supervise` with two things: a function that is the serving itself, and the ordered list of drain
+stages. For `Run` the serving function opens the listener on the configured port and then calls
+`http.Server.Serve`; for `Serve` the listener is the caller's. Calling `Serve` directly is how the
+integration tests run a real service on an ephemeral port whose origin they know before the service
+is built.
 
-**Shutdown**, on cancellation, in strict order with a 30-second overall cap. `Serve` builds one
-`context.Context` carrying that cap and derives a 15-second child for each stage, so a stage that
-overruns cannot borrow the other's budget:
+**One exit path** (`lifecycle.go`). `supervise` runs the serving function on a goroutine and waits
+for it to return or for the context to be done. Whichever happens, the same statements follow: every
+drain stage runs, in order, and `supervise` waits for the serving function before it returns. So a
+failure to listen, a listener that fails while serving, and a cancellation all drain the HTTP server
+and then the hub, and neither the hub nor a connection the server had already accepted outlives the
+call. `Service.serve` holds no `select` and no branch on how serving ended. A new exit cannot skip a stage, and a stage
+added to the list is drained on every exit. `TestSuperviseDrainsOnEveryExit` runs each way serving
+can end against the same assertions. Because failing to listen takes the same path, `Run` on a port
+it cannot bind logs the hub start and the drain lines before it returns the listen error.
+
+**Shutdown**, in strict order with a 30-second overall cap. `supervise` builds one
+`context.Context` carrying that cap and derives a child for each stage with an equal share of it,
+15 seconds each for two stages, so a stage that overruns cannot borrow the other's budget:
 
 1. `http.Server.Shutdown` (15s context) — stops accepting connections and drains in-flight requests.
    Upgraded WebSocket connections are hijacked, so this stage does not wait on them.
@@ -233,28 +254,30 @@ overruns cannot borrow the other's budget:
    every client connection, and waits on the `WaitGroup` for all pumps to exit. Both of those waits
    share the one 15-second deadline.
 
-The two errors are joined rather than short-circuited, so a hub that overran is still reported when
-the HTTP stage failed too. `Serve` then waits for the goroutine that called `http.Server.Serve` to
-return: when cancellation comes before that goroutine has started serving, `http.Server.Shutdown`
-has no listener to close, and the listener would otherwise be closed only after `Serve` had
-returned. If that goroutine reports that the listener had already failed on its own, `Serve` returns
-that failure rather than letting the cancellation hide it.
+The order is pinned by `TestServeStopsAcceptingBeforeItStopsTheHub`, which holds a request in
+flight across a cancellation and requires the hub to be running while the HTTP stage waits for it.
+The stage errors are joined rather than short-circuited, so a hub that overran is still reported
+when the HTTP stage failed too. On cancellation `supervise` then waits for the serving function to
+return: when cancellation comes before it has started serving, `http.Server.Shutdown` has no
+listener to close, and the listener would otherwise be closed only after `Serve` had returned. If
+the serving function reports that the listener had already failed on its own, that failure is
+returned rather than hidden by the cancellation.
 
 Every send to the run loop — in `register`, `unregister`, and `publish` — and the write pump's own
 event loop also select on the `quit` channel, so none of them can block shutdown by waiting on a run
 loop that has stopped reading. The other blocking waits are bounded in other ways: `ClientCount`
 selects on `done`, which closes when the run loop exits; each shutdown stage waits under its own
-deadline; `Serve`'s last receive from its serving goroutine completes once `http.Server.Shutdown`
-has run; and `writeFrame` receives only messages it has already counted as buffered.
+deadline; `supervise`'s last receive from its serving goroutine completes once
+`http.Server.Shutdown` has run; and `writeFrame` receives only messages it has already counted as buffered.
 
 ## Concurrency model
 
 | Goroutine         | Count            | Lifetime                      | Started by                                 |
 | ----------------- | ---------------- | ----------------------------- | ------------------------------------------ |
-| Hub run loop      | 1                | Process lifetime              | `Hub.start`                                |
+| Hub run loop      | 1                | Process lifetime              | `startHub`, which `New` calls              |
 | Client read pump  | 1 per connection | Until read error or shutdown  | Hub run loop, via `serve`                  |
 | Client write pump | 1 per connection | Until send closed or shutdown | `wsClient.serve`                           |
-| HTTP serving      | 1                | Process lifetime              | `Service.Serve`, which `Service.Run` calls |
+| HTTP serving      | 1                | Process lifetime              | `supervise`, for `Run` and `Serve`         |
 
 Roughly two goroutines and a 256-message buffer per connection. Only the first of the two is the
 hub's to launch and to wait on; the second belongs to the client, which is why `serve` does not
@@ -265,7 +288,9 @@ lives.
 
 The hot paths are the ones that run per message, and all three are allocation-free or close to it.
 Measured with `make bench` on an AMD Ryzen 7 7800X3D; treat the absolute numbers as machine-specific
-and the allocation counts as the durable part.
+and the allocation counts as the durable part. Tests fail if the fan-out, rate limit check or origin
+check allocates, or if canonical normalization allocates more than once (see
+[Testing](../guides/testing.md#benchmarks)); the slow path's count is not checked.
 
 | Path                                | Cost                    | Notes                                        |
 | ----------------------------------- | ----------------------- | -------------------------------------------- |

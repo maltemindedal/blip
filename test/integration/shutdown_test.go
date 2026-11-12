@@ -11,7 +11,6 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/maltemindedal/blip/internal/server"
-	"github.com/maltemindedal/blip/test/testhelpers"
 )
 
 const (
@@ -140,14 +139,14 @@ func connectTestClients(t *testing.T, hub *server.Hub, numClients int, url strin
 	clients := make([]*websocket.Conn, numClients)
 
 	for i := range numClients {
-		conn, err := testhelpers.ConnectWebSocket(url)
+		conn, err := connectWebSocket(url)
 		if err != nil {
 			t.Fatalf("Failed to connect client %d: %v", i, err)
 		}
 		clients[i] = conn
 	}
 
-	testhelpers.WaitFor(t, shutdownBudget, "every client to register", func() bool {
+	waitFor(t, shutdownBudget, "every client to register", func() bool {
 		return hub.ClientCount() == numClients
 	})
 
@@ -190,7 +189,7 @@ func TestShutdownWithActiveMessages(t *testing.T) {
 
 	const messageCount = 10
 	for i := range messageCount {
-		if err := testhelpers.SendMessage(sender, "Test message"); err != nil {
+		if err := sendMessage(sender, "Test message"); err != nil {
 			t.Fatalf("Failed to send message %d: %v", i, err)
 		}
 	}

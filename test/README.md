@@ -1,9 +1,10 @@
 # Tests
 
-- `integration/` — a real service over real HTTP/WebSocket sockets
-- `testhelpers/` — shared setup and assertion helpers for the integration suite
+- `integration/` — a real service over real HTTP/WebSocket sockets, with its setup and assertion helpers
+- `repocheck/` — checks that docs, tool pins and the Makefile match the code
 
 The unit tests are package-internal, next to the code they cover: `internal/server/*_internal_test.go`.
+`internal/mutation` replays past mistakes against the guard tests.
 
 ```bash
 make test                # everything, with -race

@@ -17,6 +17,19 @@ import (
 	"time"
 )
 
+func newTestService(t *testing.T, cfg *Config) *Service {
+	t.Helper()
+
+	svc := New(cfg)
+	t.Cleanup(func() {
+		if err := shutdownHub(t, svc.hub); err != nil {
+			t.Errorf(shutdownErrorMsg, err)
+		}
+	})
+
+	return svc
+}
+
 // TestNewConfiguresHTTPServer pins the production HTTP server settings New
 // applies. They are not reachable from outside the package, so this is where
 // the timeouts and the header limit are asserted.
@@ -26,7 +39,7 @@ func TestNewConfiguresHTTPServer(t *testing.T) {
 	cfg := NewConfig()
 	cfg.Port = ":18090"
 
-	svc := New(cfg)
+	svc := newTestService(t, cfg)
 
 	if svc.Hub() == nil {
 		t.Fatal("New returned a service without a hub")
@@ -65,7 +78,7 @@ func TestNewConfiguresHTTPServer(t *testing.T) {
 func TestNewServesTheApplicationRoutes(t *testing.T) {
 	t.Parallel()
 
-	svc := New(NewConfig())
+	svc := newTestService(t, NewConfig())
 
 	rec := httptest.NewRecorder()
 	svc.httpServer.Handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
@@ -88,7 +101,7 @@ func TestProductionTimeoutsAllowSlowResponses(t *testing.T) {
 	// is the behavior under test, not a wait for something else to happen.
 	const handlerDelay = 2 * time.Second
 
-	production := New(NewConfig()).httpServer
+	production := newTestService(t, NewConfig()).httpServer
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/slow", func(w http.ResponseWriter, _ *http.Request) {
@@ -142,22 +155,22 @@ func TestNewListensOnTheResolvedPort(t *testing.T) {
 			cfg := NewConfig()
 			cfg.Port = tt.port
 
-			if got := New(cfg).httpServer.Addr; got != tt.want {
+			if got := newTestService(t, cfg).httpServer.Addr; got != tt.want {
 				t.Errorf("Expected addr %q for port %q, got %q", tt.want, tt.port, got)
 			}
 		})
 	}
 }
 
-// TestRunStartsNothingWhenItCannotListen pins that Run opens its listener before
-// starting anything: on a port it cannot bind, it returns the listen error with
-// the hub never started, so no goroutine is left running behind it, and the
-// error stays reachable through the one Run returns.
+// TestRunDrainsTheServiceWhenItCannotListen pins that failing to listen is not
+// a path of its own: on a port it cannot bind, Run returns the listen error,
+// still reachable through the one it returns, and the hub is stopped.
 //
-// A listener that fails while serving is a different path, through Serve's
-// drain; TestServeDrainsTheHubWhenTheListenerFails and
-// TestServeClosesOpenConnectionsWhenTheListenerFails cover it.
-func TestRunStartsNothingWhenItCannotListen(t *testing.T) {
+// A listener that fails while serving is covered by
+// TestServeDrainsTheHubWhenTheListenerFails and
+// TestServeClosesOpenConnectionsWhenTheListenerFails; every combination of
+// causes and stage failures by TestSuperviseDrainsOnEveryExit.
+func TestRunDrainsTheServiceWhenItCannotListen(t *testing.T) {
 	t.Parallel()
 
 	occupied, err := net.Listen("tcp", "127.0.0.1:0")
@@ -168,7 +181,7 @@ func TestRunStartsNothingWhenItCannotListen(t *testing.T) {
 
 	cfg := NewConfig()
 	cfg.Port = occupied.Addr().String()
-	svc := New(cfg)
+	svc := newTestService(t, cfg)
 
 	// A deadline, so a regression that lets the listen succeed fails here instead
 	// of blocking until the test binary times out.
@@ -186,15 +199,14 @@ func TestRunStartsNothingWhenItCannotListen(t *testing.T) {
 	if _, ok := errors.AsType[*net.OpError](runErr); !ok {
 		t.Errorf("Expected the listen error to stay reachable, got %v", runErr)
 	}
-	if svc.Hub().started.Load() {
-		t.Error("Run started the hub although it could not listen")
+	if !svc.Hub().IsStopped() {
+		t.Error("Run returned with the hub still running although it could not listen")
 	}
 }
 
-// TestServeDrainsTheHubWhenTheListenerFails pins that Serve runs Run's
-// lifecycle rather than a copy of it: a listener that fails — here, one already
-// closed — drains the hub Serve started instead of leaving it running, and the
-// accept error stays reachable through the error Serve returns.
+// TestServeDrainsTheHubWhenTheListenerFails pins that a listener that fails —
+// here, one already closed — drains the hub instead of leaving it running, and
+// that the accept error stays reachable through the error Serve returns.
 //
 // It covers a listener that fails at once. It does not cover the cancellation
 // path, which TestServeClosesItsListenerBeforeReturning and the integration
@@ -208,7 +220,7 @@ func TestServeDrainsTheHubWhenTheListenerFails(t *testing.T) {
 	}
 	_ = ln.Close()
 
-	svc := New(nil)
+	svc := newTestService(t, nil)
 
 	// A deadline, so a regression that keeps serving fails here instead of
 	// blocking until the test binary times out.
@@ -250,9 +262,9 @@ func (l *closeRecordingListener) Close() error {
 // listener to close, and the goroutine closes it only after Serve has returned.
 // That goroutine is scheduled at random, so the test runs the case many times.
 //
-// Run opens its listener and hands it to Serve, so this covers Run's listener
-// too, though not by calling Run: the listener Run opens is its own, where a
-// test cannot record its Close.
+// Run serves its own listener through the same code, so this covers Run's
+// listener too, though not by calling Run: the listener Run opens is its own,
+// where a test cannot record its Close.
 func TestServeClosesItsListenerBeforeReturning(t *testing.T) {
 	t.Parallel()
 
@@ -269,7 +281,7 @@ func TestServeClosesItsListenerBeforeReturning(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 
-		if err := New(nil).Serve(ctx, rec); err != nil {
+		if err := newTestService(t, nil).Serve(ctx, rec); err != nil {
 			t.Fatalf("Serve returned %v after a cancelled context, want nil", err)
 		}
 		if !rec.closed.Load() {
@@ -300,7 +312,8 @@ func TestServeClosesOpenConnectionsWhenTheListenerFails(t *testing.T) {
 	defer cancel()
 
 	served := make(chan error, 1)
-	go func() { served <- New(nil).Serve(ctx, ln) }()
+	svc := newTestService(t, nil)
+	go func() { served <- svc.Serve(ctx, ln) }()
 
 	conn, err := net.Dial("tcp", ln.Addr().String())
 	if err != nil {
@@ -345,6 +358,79 @@ func TestServeClosesOpenConnectionsWhenTheListenerFails(t *testing.T) {
 	}
 }
 
+// TestServeStopsAcceptingBeforeItStopsTheHub pins the drain order: the HTTP
+// server stops accepting and finishes its in-flight requests before the hub is
+// stopped. A request is held in flight across the cancellation. Once the
+// listener refuses connections the drain has begun, and the hub must still be
+// running, because the HTTP stage is waiting for that request.
+//
+// It covers the order of the two stages [Service.serve] lists. It does not
+// cover a stage missing from that list, or what each stage does to WebSocket
+// clients, which TestShutdownStopsAcceptingBeforeDrainingClients in
+// test/integration reads off the log.
+func TestServeStopsAcceptingBeforeItStopsTheHub(t *testing.T) {
+	t.Parallel()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Failed to listen: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	addr := ln.Addr().String()
+
+	inFlight := make(chan struct{})
+	release := make(chan struct{})
+	svc := newTestService(t, nil)
+	svc.httpServer.Handler = http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		close(inFlight)
+		<-release
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	served := make(chan error, 1)
+	go func() { served <- svc.Serve(ctx, ln) }()
+
+	requested := make(chan struct{})
+	go func() {
+		defer close(requested)
+		resp, err := http.Get("http://" + addr + "/")
+		if err == nil {
+			_ = resp.Body.Close()
+		}
+	}()
+	<-inFlight
+
+	cancel()
+
+	refused := false
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(time.Millisecond) {
+		conn, err := net.Dial("tcp", addr)
+		if err != nil {
+			refused = true
+			break
+		}
+		_ = conn.Close()
+	}
+	if !refused {
+		t.Error("The listener still accepted connections 10s after the cancellation")
+	}
+	if svc.Hub().IsStopped() {
+		t.Error("The hub was stopped while the HTTP server still had a request in flight")
+	}
+
+	close(release)
+	<-requested
+
+	if err := <-served; err != nil {
+		t.Errorf("Serve returned %v, want nil", err)
+	}
+	if !svc.Hub().IsStopped() {
+		t.Error("Serve returned with the hub still running")
+	}
+}
+
 // cancellingListener fails every Accept with err after calling cancel: a
 // listener that breaks at the moment a shutdown is requested.
 type cancellingListener struct {
@@ -360,13 +446,13 @@ func (l *cancellingListener) Accept() (net.Conn, error) {
 
 // TestServeReportsAListenerFailureThatRacesCancellation pins that a listener
 // failure is reported even when a cancellation arrives with it. The listener
-// cancels the context inside Accept and then fails, so run's select wakes on
-// the cancellation and takes the shutdown path, and the failure reaches run
-// only through the serving goroutine it waits for after the drain.
+// cancels the context inside Accept and then fails, so supervise's select can
+// wake on the cancellation, and the failure then reaches it only through the
+// serving goroutine it waits for after the drain.
 //
 // It does not cover a failure that comes after the shutdown has reached the
-// http.Server: Serve then reports the server's own close, which run rightly
-// treats as no failure.
+// http.Server: Serve then reports the server's own close, which is rightly
+// treated as no failure.
 func TestServeReportsAListenerFailureThatRacesCancellation(t *testing.T) {
 	t.Parallel()
 
@@ -380,7 +466,7 @@ func TestServeReportsAListenerFailureThatRacesCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	serveErr := New(nil).Serve(ctx, &cancellingListener{Listener: ln, cancel: cancel, err: errBroken})
+	serveErr := newTestService(t, nil).Serve(ctx, &cancellingListener{Listener: ln, cancel: cancel, err: errBroken})
 
 	if !errors.Is(serveErr, errBroken) {
 		t.Errorf("Serve returned %v, want the listener's error", serveErr)

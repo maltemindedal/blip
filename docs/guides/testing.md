@@ -10,17 +10,18 @@ service as a client sees it.
 ```
 internal/server/
 └── *_internal_test.go       # package server — unit tests and benchmarks, one file per source file
+internal/mutation/           # test-only — past mistakes as mutants the guard tests must fail
 test/
 ├── integration/             # package integration — a real Service over real sockets
-│   ├── setup_test.go            # shared plumbing: test services, dialing, assertions
+│   ├── setup_test.go            # shared plumbing: test services, registered dials
+│   ├── helpers_test.go          # shared plumbing: polling, HTTP requests, raw dials, assertions
 │   ├── error_handling_test.go   # read/write error paths, registration accounting
 │   ├── multiclient_test.go      # many clients exchanging messages concurrently
 │   ├── security_test.go         # origin validation, size limits, rate limiting
 │   ├── server_test.go           # health endpoint, full startup path
 │   ├── shutdown_test.go         # graceful shutdown, ordering, clients closed
 │   └── websocket_test.go        # connection lifecycle, broadcasting
-└── testhelpers/             # helpers the integration suite shares (no tests of its own)
-    └── helpers.go
+└── repocheck/               # test-only — docs, pins and the Makefile cross-checked against the code
 ```
 
 **Unit tests** are package-internal: `x_internal_test.go` covers `x.go` and can reach the package's
@@ -39,11 +40,13 @@ fixed port, driven the way `main` drives it. They see `internal/server` through 
 only, which is what keeps them testing the service rather than a copy of it.
 
 Checks on the package's own shape, rather than on behaviour anyone outside can call, are unit tests
-too. `TestResolveConfigPreservesEveryField` compares a resolved `Config` field for field
-so a field added to the struct cannot be dropped in resolution unnoticed, and
+too. `TestEveryConfigFieldReachesTheSettings` changes each `Config` field in turn and requires the
+resolved settings to change, so a field added to the struct cannot be ignored in resolution
+unnoticed; `TestRawConfigStopsAtTheBoundary` parses the package's non-test sources to keep the raw
+`Config` from being named past `New`; and
 `rate_limiter_internal_test.go` holds `TestClockSeamIsTestOnly`, which parses the package's non-test
-sources to keep production off the rate limiter's clock seam. Neither is reachable from outside the
-package by construction — one names an unexported type, the other reads the package's own files.
+sources to keep production off the rate limiter's clock seam. None is reachable from outside the
+package by construction: the first names an unexported type, the others read the package's own files.
 
 That view is also what makes the hub's delivery rules testable at all. `hub_internal_test.go` defines
 a `fakeClient` — an inbox and an address, no socket underneath — and registers it through the real
@@ -99,26 +102,30 @@ nothing fails a build for dropping coverage.
 
 ## Helpers
 
-`test/testhelpers` provides the integration suite's shared plumbing. Use it instead of hand-rolling
-dials and requests:
+`test/integration/helpers_test.go` holds the integration suite's shared plumbing. Use it instead of
+hand-rolling dials and requests:
 
 | Helper                                            | Purpose                                                             |
 | ------------------------------------------------- | ------------------------------------------------------------------- |
-| `WaitFor(t, timeout, what, cond)`                 | Poll a condition to a deadline — use instead of `time.Sleep`         |
-| `WaitForServer(t, url, timeout)`                  | Block until a just-started server accepts requests                   |
-| `Dial(t, wsURL, origin)`                          | Dial a `ws://` URL from a given `Origin`, closed when the test ends  |
-| `ConnectWebSocket(url)`                           | Dial with the default dev origin; returns an error instead of failing |
-| `SendMessage(conn, content)`                      | Send `{"content": ...}`                                              |
-| `MakeRequest(t, method, url)`                     | HTTP request, fully read; returns a `Response` with the body closed  |
-| `AssertStatusCode` / `AssertContentType` / `AssertBody` | Common assertions over a `Response`                            |
+| `waitFor(t, timeout, what, cond)`                 | Poll a condition to a deadline — use instead of `time.Sleep`         |
+| `waitForServer(t, url, timeout)`                  | Block until a just-started server accepts requests                   |
+| `dialUnregistered(t, wsURL, origin)`              | Dial a `ws://` URL from a given `Origin` without waiting for the hub; closed when the test ends |
+| `connectWebSocket(url)`                           | Dial with the default dev origin; returns an error instead of failing |
+| `sendMessage(conn, content)`                      | Send `{"content": ...}`                                              |
+| `makeRequest(t, method, url)`                     | HTTP request, fully read; returns a `response` with the body closed  |
+| `assertStatusCode` / `assertContentType` / `assertBody` | Common assertions over a `response`                            |
 
-The `integration` package layers its own helpers on top in `setup_test.go` — `newTestServer` (a
+The helpers are unexported functions in a `_test.go` file of the package that uses them, so the
+linter's `unused` check reports one that loses its last caller. An exported helper in a package of
+its own counts as used whether or not anything calls it.
+
+`setup_test.go` layers the service helpers on top — `newTestServer` (a
 real `server.Service` with a hub of its own, on an ephemeral port and the default settings),
 `newConfiguredTestServer` (the same, with a callback that varies the config first — the listener is
 opened before the service is built, so its own origin is already on the allow-list), `startService`
 (the same service started through `Run` on a fixed port, stopped by cancelling its context), `dial` /
 `dialPair` / `dialClients` (which return only once the hub has registered every connection), and
-`waitForUnregister`. Prefer those inside that package: they make client-count assertions exact.
+`waitForUnregister`. Prefer those to a raw dial: they make client-count assertions exact.
 
 ## Writing tests
 
@@ -133,16 +140,22 @@ Follow the conventions already in the suite:
 - Cover the failure path, not just the happy one — most bugs in this codebase live in error handling
   and shutdown ordering.
 - Own your state, then run in parallel. Nothing configurable is process-wide: give a unit test its own
-  hub with `startTestHub(t, cfg)`, or an integration test a whole service of its own with
-  `newConfiguredTestServer`, so both the client counts and the settings it observes belong
-  to it alone. A test that does that should call `t.Parallel()`. The one thing still shared by the
+  hub with `startTestHub(t, cfg)` or its own service with `newTestService(t, cfg)`, or an integration
+  test a whole service of its own with `newConfiguredTestServer`, so both the client counts and the
+  settings it observes belong to it alone. A test that owns its state should call `t.Parallel()`,
+  except an allocation test (see [Benchmarks](#benchmarks)). `startTestHub` and `newTestService` are the only way a
+  unit test gets a hub or a service, because both register the shutdown: a hub is running from the
+  moment it exists. `TestMain` in `hub_internal_test.go` fails the test binary, with the stacks, if
+  any goroutine of `internal/server` is still running after the tests finish, so a test that calls
+  `startHub` or `New` directly and leaves the hub running fails the run even though it passes. The
+  integration suite has no such check. The one thing still shared by the
   process is the logger, so `TestShutdownStopsAcceptingBeforeDrainingClients` — which reads the
   shutdown ordering off `server.SetLogger` — stays serial. Fixed listen ports are fine in parallel as
   long as no two tests pick the same one.
 - Prefer waiting on a channel or polling with a deadline over `time.Sleep` for synchronization. The
   hub's `ClientCount()` is answered by its own event loop, so a reply proves every registration,
   unregistration, and broadcast queued before it has been processed — that is the barrier to wait on,
-  via `testhelpers.WaitFor`. A `time.Sleep` is only acceptable when elapsed wall-clock time is the
+  via `waitFor`. A `time.Sleep` is only acceptable when elapsed wall-clock time is the
   behavior under test and there is no clock to drive by hand; say so in a comment. Prefer giving
   yourself one, the way the rate limiter does: `allow()` reads the clock so production has nothing to
   get wrong, and an `allowAt(now)` beside it takes the instant for the tests. The refill rules are
@@ -161,16 +174,75 @@ the benchmarks execute. The benchmarks live alongside the code they measure, in
 `internal/server/*_internal_test.go`, because they exercise unexported hot paths: broadcast fan-out,
 message normalization, the rate limiter, and origin checks.
 
-`BenchmarkHubBroadcast` builds its client set with `newBenchHub`, which installs fakes through the
-hub's own registration path rather than writing the client map behind its back, so the fan-out it
-times runs over a map the hub assembled itself. It deliberately leaves the event loop unstarted and
-calls the fan-out directly: that keeps the client map owned by the one goroutine touching it and
-keeps channel handoff and pump scheduling out of the number.
+`BenchmarkHubBroadcast` builds its client set with `newBenchRegistry`, which adds fakes to a bare
+`registry` the way the run loop adds them, so the fan-out it times runs over a map assembled by the
+production code. There is no hub and no event loop: the benchmark goroutine is the only one using
+that registry, and it calls `handleBroadcast` directly, which keeps channel handoff and pump
+scheduling out of the number.
 
-They assert allocation counts implicitly rather than wall-clock time — the numbers move with the
-machine, but a path that was allocation-free and stops being so is a regression worth catching. Run
-`go test -bench . -benchmem ./internal/...` before and after a change to the hot path and compare
-the `allocs/op` column.
+The benchmarks assert nothing: they report time and `allocs/op`, and a regression in either still
+passes. Four tests beside them assert the allocation counts with `testing.AllocsPerRun`:
+`TestHubBroadcastDoesNotAllocate`, `TestRateLimiterAllowDoesNotAllocate` and
+`TestOriginCheckDoesNotAllocate` require 0 allocations, and
+`TestNormalizeMessageAllocatesOnlyThePayload` allows 1, the payload itself. They run in the `test`
+job with `-race`, which gives the same counts as a run without it, and each has a mutant in
+`internal/mutation`. They do not call `t.Parallel()`, because `AllocsPerRun` counts every
+allocation in the process and panics inside a parallel test. Each covers the path its benchmark
+times, not the slow paths beside it, such as a message that needs the JSON round trip.
+
+## Repository checks
+
+`test/repocheck` holds tests about the repository rather than the service. They cross-check facts
+that docs and config copy by hand, and they run with `go test ./...` and in CI's `test` job. Each
+failure message names the file to edit and the fix.
+
+| Check                                      | What it compares                                                              |
+| ------------------------------------------ | ----------------------------------------------------------------------------- |
+| `TestMakefileDocumentedTargetsHaveRules`   | Every `## name:` help comment is followed by its `name:` rule line            |
+| `TestMakefileDryRunsEveryDocumentedTarget` | `make -n <target>` succeeds for each documented target (skipped without make) |
+| `TestToolPinsAgreeWithCI`                  | golangci-lint and govulncheck versions match `ci.yml`; neither is `@latest`   |
+| `TestGoVersionAgreesWithGoMod`             | Go versions named in docs and the Dockerfile match `go.mod`                   |
+| `TestDocIdentifiersExist`                  | Test, benchmark and helper names in docs are declared in some `.go` file      |
+| `TestAlertTableMatchesLogCalls`            | The alert table's `msg` and level match a `slog` call                         |
+| `TestDocsQuoteLogMsgsExactly`              | Log `msg` strings quoted in docs match the code's capitalization              |
+| `TestEnvVarsAreMirrored`                   | Each env var the code reads appears in the configuration reference, `.env.example`, `docker-compose.yml` and `config_internal_test.go` |
+| `TestInternalTestFilesNameASourceFile`     | `x_test.go` and `x_internal_test.go` sit beside an `x.go`                     |
+
+The package finds the repository root by walking up to `go.mod`, so a compiled test binary checks
+whichever checkout it runs in: `go test -c -o /tmp/repocheck.test ./test/repocheck`, then run it from
+the root of a `git archive` of an older commit to replay a past mistake.
+
+A new check goes in the file for its subject (`makefile_test.go`, `versions_test.go`,
+`docs_test.go`, `envvars_test.go`, `testfiles_test.go`), using the helpers in `repo_test.go`. Give it
+a failure message that names the file and the edit. Before merging, break the thing it guards in a
+scratch copy and watch the check fail, and say in its comment what it does not cover.
+
+## Guard tests and mutants
+
+A guard test protects an invariant, and several here first passed under the bug they were written to
+catch. `internal/mutation` checks that they now fail. Its table, `mutants` in
+`internal/mutation/mutants_test.go`, lists past mistakes as edits to production code. For each one the
+harness copies the module to a temporary directory, applies the edits, runs only the tests named in
+`Kills`. It fails if a named test passes or does not run, if an `Old` text is not found exactly once,
+if the mutant does not compile, or if an edit touches a `_test.go` file. `go test ./internal/...` runs it, and `-short`
+skips it with a message. It adds a few seconds, because each mutant builds `internal/server` once.
+
+When you add a guard test, add its mutant in the same commit:
+
+1. Write the test, and open the comment above it with the test's name followed by `pins`,
+   `guards` or `enforces`.
+2. Add a `mutant` that reintroduces the bug the test exists to catch. `Name` says what is wrong, `Origin`
+   names the commit that introduced the bug or added the test that kills it, `Edits` are `{File, Old,
+   New}` replacements (an empty `Old` adds a new file), and `Kills` lists the test.
+3. Run `go test -run TestGuardTestsKillTheirMutants ./internal/mutation`. Break the mutant on purpose
+   (change `New` to equal `Old`) and watch the test report `SURVIVED`, then restore it.
+
+`TestEveryGuardTestHasAMutant` fails for a test whose comment says it pins, guards or enforces
+something and that no mutant names, except the tests listed in `baseline_test.go`, which predate the
+harness. That list may only shrink: when you add a mutant for a listed test, delete its entry. The
+check trusts the comment's wording, so a guard test described some other way is not seen.
+
+The harness runs the mutant without `-race`, so a bug only the race detector reveals cannot be a mutant.
 
 ## In CI
 

@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"sync"
-	"sync/atomic"
 )
 
 // clientConn is everything the hub needs from a connected client, and nothing
@@ -36,65 +35,37 @@ type clientConn interface {
 
 // Hub manages all WebSocket client connections and handles message broadcasting.
 //
-// A Hub is built by the [Service] that owns it and reached through
-// [Service.Hub]. Its zero value is not usable: its channels are never made, so
-// [Hub.ClientCount] on one would block forever. Even the Service's own hub
-// answers ClientCount only once its run loop has started, which [Service.Run]
-// and [Service.Serve] do; until then ClientCount blocks.
-//
-// The clients map is owned exclusively by the hub's run loop: registration,
-// unregistration, broadcast fan-out, and shutdown all happen there. That single
-// ownership removes lock traffic from the broadcast path entirely, so every
-// mutation of clients must be reached through the hub's register, unregister
-// and publish methods, which hand the work to that goroutine over a channel.
+// The zero value is not usable: its channels are nil, so [Hub.ClientCount] on
+// one blocks forever. The only working Hub is the one [Service.Hub] returns.
 type Hub struct {
-	// cfg is the resolved configuration every connection of this hub runs
-	// under: its origin allow-list, its message size limit, and its rate
-	// limit. It is set once by [newHub] and never mutated, so the connection
-	// paths read it without synchronization.
-	cfg resolvedConfig
+	settings settings
 
-	// clients maps every registered client to the inbox it was registered with.
-	// Keeping the channel here rather than asking the client for it per message
-	// is what keeps the fan-out free of interface dispatch.
-	clients       map[clientConn]chan<- []byte
 	broadcast     chan broadcastMessage
 	registerReq   chan clientConn
 	unregisterReq chan clientConn
 
-	// failed is scratch space reused across broadcasts to avoid allocating a
-	// slice per message. Only the run loop touches it.
-	failed []clientConn
-
-	// countReq carries a reply channel into the run loop so callers can
-	// read the client count without touching the map themselves.
 	countReq chan chan int
 
-	wg           sync.WaitGroup
 	quit         chan struct{}
 	shutdownOnce sync.Once
 	done         chan struct{}
-	started      atomic.Bool
+	clientsDone  chan struct{}
 }
 
-// newHub creates and initializes a new Hub instance with all necessary channels
-// and client map. The returned Hub is ready to manage WebSocket connections.
-//
-// cfg is resolved once, here, and belongs to the hub from then on: the origin
-// check, the message size limit, and the rate limit every connection of this hub
-// runs under all come from it. A nil cfg means the defaults, which is what a
-// caller that does not care about any of them passes.
-func newHub(cfg *Config) *Hub {
-	return &Hub{
-		cfg:           resolveConfig(cfg),
-		clients:       make(map[clientConn]chan<- []byte),
+func startHub(s settings) *Hub {
+	h := &Hub{
+		settings:      s,
 		broadcast:     make(chan broadcastMessage),
 		registerReq:   make(chan clientConn),
 		unregisterReq: make(chan clientConn),
 		countReq:      make(chan chan int),
 		quit:          make(chan struct{}),
 		done:          make(chan struct{}),
+		clientsDone:   make(chan struct{}),
 	}
+
+	go h.run()
+	return h
 }
 
 // register hands client to the hub's run loop, which adds it to the client set
@@ -146,10 +117,9 @@ func (h *Hub) publish(msg broadcastMessage) bool {
 }
 
 // ClientCount reports how many clients are currently registered. The count is
-// answered by the run loop, which owns the map, so it is consistent with
-// every registration and broadcast the hub has already processed. It blocks
-// until the run loop has started, which [Service.Run] and [Service.Serve] do,
-// and returns 0 once the hub has stopped.
+// answered by the run loop, which owns the registry, so it is consistent with
+// every registration and broadcast the hub has already processed. It returns 0
+// once the hub has stopped.
 func (h *Hub) ClientCount() int {
 	reply := make(chan int, 1)
 
@@ -171,18 +141,6 @@ func (h *Hub) stopping() <-chan struct{} {
 	return h.quit
 }
 
-// start launches the hub event loop in a goroutine if it is not already running.
-//
-// The started flag is set here, before the goroutine exists, not inside it: a
-// [Hub.shutdown] issued straight after start must see the loop as started and
-// signal it, rather than return early and leave a loop that starts afterwards to
-// run for good.
-func (h *Hub) start() {
-	if h.started.CompareAndSwap(false, true) {
-		go h.run()
-	}
-}
-
 // IsStopped reports whether the hub event loop has exited.
 func (h *Hub) IsStopped() bool {
 	select {
@@ -193,112 +151,107 @@ func (h *Hub) IsStopped() bool {
 	}
 }
 
-// run is the hub's main event loop, handling client registration,
-// unregistration, and message broadcasting. It runs until shutdown is signalled
-// and is launched in its own goroutine by [Hub.start].
 func (h *Hub) run() {
+	var serving sync.WaitGroup
+	defer func() {
+		serving.Wait()
+		close(h.clientsDone)
+	}()
 	defer close(h.done)
+
+	reg := newRegistry()
 
 	for {
 		select {
 		case <-h.quit:
-			h.shutdownClients()
+			reg.closeAll()
 			return
 
 		case client := <-h.registerReq:
-			h.addClient(client)
+			reg.add(client)
+			serving.Go(client.serve)
 
 		case client := <-h.unregisterReq:
-			h.removeClient(client)
+			reg.remove(client)
 
-		case broadcastMsg := <-h.broadcast:
-			h.handleBroadcast(broadcastMsg)
+		case msg := <-h.broadcast:
+			reg.handleBroadcast(msg)
 
 		case reply := <-h.countReq:
-			reply <- len(h.clients)
+			reply <- len(reg.clients)
 		}
 	}
 }
 
-// addClient registers a client and starts serving it.
-//
-// The WaitGroup is incremented here, inside the run loop, so a client that got
-// in before shutdown was signalled is always one [Hub.shutdown] waits for.
-func (h *Hub) addClient(client clientConn) {
-	h.clients[client] = client.inbox()
-	log().Info("client registered", "addr", client.remoteAddr(), "total_clients", len(h.clients))
+type registry struct {
+	clients map[clientConn]chan<- []byte
 
-	h.wg.Go(func() {
-		client.serve()
-	})
+	failed []clientConn
 }
 
-// removeClient unregisters a client and closes its inbox. It is a no-op for
-// clients that are already gone, which makes double unregistration safe.
-func (h *Hub) removeClient(client clientConn) {
-	inbox, ok := h.clients[client]
+func newRegistry() *registry {
+	return &registry{clients: make(map[clientConn]chan<- []byte)}
+}
+
+func (r *registry) add(client clientConn) {
+	r.clients[client] = client.inbox()
+	log().Info("client registered", "addr", client.remoteAddr(), "total_clients", len(r.clients))
+}
+
+func (r *registry) remove(client clientConn) {
+	inbox, ok := r.clients[client]
 	if !ok {
 		return
 	}
 
-	delete(h.clients, client)
+	delete(r.clients, client)
 	close(inbox)
-	log().Info("client unregistered", "addr", client.remoteAddr(), "total_clients", len(h.clients))
+	log().Info("client unregistered", "addr", client.remoteAddr(), "total_clients", len(r.clients))
 }
 
 // handleBroadcast fans a message out to every client except the sender.
 //
 // Delivery is non-blocking: a client whose buffer is full is dropped rather
 // than allowed to stall the hub for everyone else.
-func (h *Hub) handleBroadcast(broadcastMsg broadcastMessage) {
-	h.failed = h.failed[:0]
+func (r *registry) handleBroadcast(msg broadcastMessage) {
+	r.failed = r.failed[:0]
 	delivered := 0
 
-	for client, inbox := range h.clients {
-		if client == broadcastMsg.Sender {
+	for client, inbox := range r.clients {
+		if client == msg.Sender {
 			continue
 		}
 
 		select {
-		case inbox <- broadcastMsg.Payload:
+		case inbox <- msg.Payload:
 			delivered++
 		default:
-			h.failed = append(h.failed, client)
+			r.failed = append(r.failed, client)
 		}
 	}
 
-	dropped := len(h.failed)
-	for _, client := range h.failed {
+	dropped := len(r.failed)
+	for _, client := range r.failed {
 		log().Warn("dropping client with a full send buffer", "addr", client.remoteAddr())
-		h.removeClient(client)
+		r.remove(client)
 	}
-	clear(h.failed)
+	clear(r.failed)
 
 	if debugEnabled() {
 		log().Debug("broadcast complete", "delivered", delivered, "dropped", dropped)
 	}
 }
 
-// shutdownClients closes every active client connection, which unblocks the
-// read pumps so they can exit.
-func (h *Hub) shutdownClients() {
-	for client := range h.clients {
+func (r *registry) closeAll() {
+	for client := range r.clients {
 		client.closeConnection()
 	}
 
-	log().Info("closed client connections", "count", len(h.clients))
-	clear(h.clients)
+	log().Info("closed client connections", "count", len(r.clients))
+	clear(r.clients)
 }
 
-// shutdown initiates graceful shutdown of the hub and waits for all goroutines
-// to complete. It returns after all client connections are closed and goroutines
-// have finished, or when ctx is done — whichever comes first. Both stages share
-// the one deadline carried by ctx.
 func (h *Hub) shutdown(ctx context.Context) error {
-	if !h.started.Load() {
-		return nil
-	}
-
 	log().Info("initiating hub shutdown")
 
 	h.shutdownOnce.Do(func() {
@@ -309,13 +262,7 @@ func (h *Hub) shutdown(ctx context.Context) error {
 		return err
 	}
 
-	clientsDone := make(chan struct{})
-	go func() {
-		h.wg.Wait()
-		close(clientsDone)
-	}()
-
-	if err := awaitStage(ctx, clientsDone, "client"); err != nil {
+	if err := awaitStage(ctx, h.clientsDone, "client"); err != nil {
 		return err
 	}
 

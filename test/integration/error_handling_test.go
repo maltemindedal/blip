@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/maltemindedal/blip/test/testhelpers"
 )
 
 const errMsgFailedToClose = "Failed to close connection: %v"
@@ -18,9 +17,9 @@ func TestWriteAfterCloseFails(t *testing.T) {
 	t.Parallel()
 
 	testServer, _ := newTestServer(t)
-	conn := testhelpers.Dial(t, testServer.wsURL(), testServer.URL())
+	conn := dialUnregistered(t, testServer.wsURL(), testServer.URL())
 
-	if err := testhelpers.SendMessage(conn, "test"); err != nil {
+	if err := sendMessage(conn, "test"); err != nil {
 		t.Fatalf("Failed to write message: %v", err)
 	}
 
@@ -28,7 +27,7 @@ func TestWriteAfterCloseFails(t *testing.T) {
 		t.Logf(errMsgFailedToClose, err)
 	}
 
-	if err := testhelpers.SendMessage(conn, "test2"); err == nil {
+	if err := sendMessage(conn, "test2"); err == nil {
 		t.Error("Expected an error writing to a closed connection")
 	}
 }
@@ -40,7 +39,7 @@ func TestReadDeadlineProducesTimeout(t *testing.T) {
 	t.Parallel()
 
 	testServer, _ := newTestServer(t)
-	conn := testhelpers.Dial(t, testServer.wsURL(), testServer.URL())
+	conn := dialUnregistered(t, testServer.wsURL(), testServer.URL())
 
 	if err := conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond)); err != nil {
 		t.Fatalf("Failed to set read deadline: %v", err)
@@ -89,7 +88,7 @@ func TestMalformedMessageKeepsConnectionOpen(t *testing.T) {
 		t.Fatalf("Failed to send malformed message: %v", err)
 	}
 
-	if err := testhelpers.SendMessage(sender, "still here"); err != nil {
+	if err := sendMessage(sender, "still here"); err != nil {
 		t.Fatalf("Failed to send follow-up message: %v", err)
 	}
 

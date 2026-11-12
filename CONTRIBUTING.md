@@ -7,7 +7,7 @@ Everyone taking part in this project is expected to follow the [code of conduct]
 
 ## Development setup
 
-Prerequisites: Go 1.26.9 or later, Git, and optionally GNU Make.
+Prerequisites: Go 1.26.11 or later, Git, and optionally GNU Make.
 
 ```bash
 git clone https://github.com/maltemindedal/blip.git
@@ -93,7 +93,7 @@ Linters enabled in `.golangci.yml`, grouped as the file groups them:
 Formatting is enforced separately by the `formatters` block (`gofmt`, `goimports`).
 
 The repository also carries [`AGENTS.md`](AGENTS.md), guidance for AI coding assistants: the
-commands that mirror CI, the conventions reviews enforce, and the gotchas.
+commands that mirror CI, each rule with the check that enforces it, and the gotchas.
 
 ## Tests
 

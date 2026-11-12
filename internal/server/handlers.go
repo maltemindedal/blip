@@ -53,8 +53,8 @@ func newUpgrader(origins originPolicy) websocket.Upgrader {
 // Every connection runs under h's resolved settings: the upgrader checks h's
 // origin policy, and each client gets h's size and rate limits.
 func webSocketHandlerForHub(h *Hub) http.HandlerFunc {
-	cfg := &h.cfg
-	upgrader := newUpgrader(cfg.origins)
+	s := &h.settings
+	upgrader := newUpgrader(s.origins)
 
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -73,7 +73,7 @@ func webSocketHandlerForHub(h *Hub) http.HandlerFunc {
 			return
 		}
 
-		client := newClient(conn, h, r.RemoteAddr, cfg)
+		client := newClient(conn, h, r.RemoteAddr, s)
 
 		// A rejected client was never added to the hub, so closing it is the
 		// handler's job.

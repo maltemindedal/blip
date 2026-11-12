@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/maltemindedal/blip/internal/server"
-	"github.com/maltemindedal/blip/test/testhelpers"
 )
 
 // TestHealthEndpointIntegration tests the health endpoint with the actual server configuration.
@@ -16,11 +15,11 @@ func TestHealthEndpointIntegration(t *testing.T) {
 
 	testServer, _ := newTestServer(t)
 
-	resp := testhelpers.MakeRequest(t, http.MethodGet, testServer.URL()+"/")
+	resp := makeRequest(t, http.MethodGet, testServer.URL()+"/")
 
-	testhelpers.AssertStatusCode(t, resp, http.StatusOK)
-	testhelpers.AssertContentType(t, resp, "text/plain")
-	testhelpers.AssertBody(t, resp, server.HealthResponse)
+	assertStatusCode(t, resp, http.StatusOK)
+	assertContentType(t, resp, "text/plain")
+	assertBody(t, resp, server.HealthResponse)
 }
 
 // TestUnmatchedPathsServeHealth verifies the documented catch-all behavior: `/`
@@ -31,10 +30,10 @@ func TestUnmatchedPathsServeHealth(t *testing.T) {
 
 	testServer, _ := newTestServer(t)
 
-	resp := testhelpers.MakeRequest(t, http.MethodGet, testServer.URL()+"/nonexistent")
+	resp := makeRequest(t, http.MethodGet, testServer.URL()+"/nonexistent")
 
-	testhelpers.AssertStatusCode(t, resp, http.StatusOK)
-	testhelpers.AssertBody(t, resp, server.HealthResponse)
+	assertStatusCode(t, resp, http.StatusOK)
+	assertBody(t, resp, server.HealthResponse)
 }
 
 // TestFullServerIntegration tests the complete startup path: the real service,
@@ -49,10 +48,10 @@ func TestFullServerIntegration(t *testing.T) {
 
 	svc := startService(t, ":18086")
 
-	resp := testhelpers.MakeRequest(t, http.MethodGet, svc.URL()+"/")
-	testhelpers.AssertStatusCode(t, resp, http.StatusOK)
-	testhelpers.AssertContentType(t, resp, "text/plain")
-	testhelpers.AssertBody(t, resp, server.HealthResponse)
+	resp := makeRequest(t, http.MethodGet, svc.URL()+"/")
+	assertStatusCode(t, resp, http.StatusOK)
+	assertContentType(t, resp, "text/plain")
+	assertBody(t, resp, server.HealthResponse)
 
 	if err := svc.shutdown(t); err != nil {
 		t.Errorf("Service run returned an error: %v", err)

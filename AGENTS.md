@@ -4,9 +4,7 @@ Blip is a single-binary WebSocket relay: a message sent to `/ws` reaches every o
 
 ## Commands
 
-Lint with the golangci-lint that `make install-tools` builds into `$(go env GOPATH)/bin` (CI's pinned version, compiled by your Go): one built with an older Go, such as a preinstalled binary, refuses this module.
-
-Pre-PR gate, mirroring CI's `test`, `lint`, `vulncheck` and `bench` jobs:
+Pre-PR gate, mirroring CI's `test`, `lint`, `vulncheck` and `bench` jobs. Lint with the golangci-lint that `make install-tools` builds into `$(go env GOPATH)/bin` (CI's pinned version, compiled by your Go): one built with an older Go, such as a preinstalled binary, refuses this module.
 
 ```bash
 go mod verify
@@ -20,35 +18,38 @@ go test -run '^$' -bench . -benchtime=10x ./internal/...
 
 - Edit loop: `go test -race ./...`. `make test` adds `-v` and buries the result in about 1,500 lines of log output.
 - Single test: `go test -race -run '^TestHubShutdownIsIdempotent$' -v ./internal/server` (unit tests; integration tests are in `./test/integration`).
-- Allocation check: `go test -run '^$' -bench . -benchmem ./internal/...` (see Conventions).
-- After editing `Dockerfile` or `.dockerignore`: `docker build -t blip:dev .` (needs Docker; CI's `docker` job builds the image).
-- After editing the `Makefile`: `make -n <target>` for each target near the edit. An agent edit once deleted the `release:` line, and its recipe silently ran inside `build-current`.
 
-CI fails on these and on the image build. Trivy findings, the Codecov upload (no token is configured) and coverage never fail it.
-
-Where CONTRIBUTING.md suggests `make ci-local`, run the gate above. Run `make clean`, `make all`, `make ci-local` or `make release` only when the user asks for that target: each calls `go clean -cache -testcache -modcache`, which wipes the build and module caches of every Go project on the machine.
+CI fails on these and on the image build (`docker build -t blip:dev .` locally, after editing `Dockerfile` or `.dockerignore`). Trivy findings, the Codecov upload (no token is configured) and coverage never fail it. Where CONTRIBUTING.md suggests `make ci-local`, run the gate above. Run `make clean`, `make all`, `make ci-local` or `make release` only when the user asks for that target: each calls `go clean -cache -testcache -modcache`, which wipes the build and module caches of every Go project on the machine.
 
 The lifecycle tests in `test/integration` listen on fixed ports 127.0.0.1:18082-18086, so two test runs on one host fail with `bind: address already in use`. With parallel worktrees, run the suite one at a time and treat that error as a concurrent run: wait and rerun. A new fixed-port test needs a port no other test uses.
 
-## Conventions
+## Rules and what enforces them
 
-- **One dependency.** `go list -m all` prints two lines: this module and `github.com/gorilla/websocket`. Build with the standard library: a new module, test-only or `golang.org/x/*` included, breaks a design constraint the README states, and no CI check catches it.
-- **Allocation-free hot paths.** Nothing fails when a hot path starts allocating: a per-message allocation added to `handleBroadcast` passes the whole suite and CI's bench job and shows only in the `allocs/op` column. The benchmarks assert nothing, whatever `docs/guides/testing.md` says. When you change `hub.go`, `message_json.go`, `rate_limiter.go` or `origin.go`, run the allocation check on the base commit and on your change, and put both results in the PR. Expected: `BenchmarkHubBroadcast`, `BenchmarkRateLimiterAllow` and `BenchmarkOriginCheck` at 0 allocs/op, `BenchmarkNormalizeMessage` at 1 (the payload itself).
-- **Hub ownership.** Before changing `hub.go`, `client.go` or `service.go`, read `docs/architecture/overview.md`. Only the hub's run loop touches the client map, which has no lock: every change arrives through `register`, `unregister` or `publish`. Every send to the run loop (`register`, `unregister`, `publish`) and the write pump's select carry a `<-quit` case (the write pump reads it as `<-hub.stopping()`); any other blocking wait needs a bound of its own, as the overview's lifecycle section lists.
-- **Logging.** Per-message logs go at Debug inside `if debugEnabled()`, because slog builds its arguments before it checks the level. A WARN a client can trigger repeatedly logs once per episode, as the rate-limit warning does. Log `msg` strings are an operator contract: renaming one means updating the alert table in `docs/guides/deploying-to-production.md`.
+A failing check names the file to edit. When an agent breaks a rule that nothing enforces twice, add a check and update its row.
+
+| Rule | Enforced by |
+| --- | --- |
+| `handleBroadcast`, `rateLimiter.allow` and `originPolicy.checkOrigin` make 0 allocations; `normalizeMessage` makes 1 for a canonical message | `TestHubBroadcastDoesNotAllocate`, `TestRateLimiterAllowDoesNotAllocate`, `TestOriginCheckDoesNotAllocate`, `TestNormalizeMessageAllocatesOnlyThePayload`. The benchmarks assert nothing |
+| Only the hub's run loop touches the client map | The compiler: the map is in a `registry` local to `Hub.run` |
+| Code past `New` never names the raw `Config`; every `Config` field reaches the settings | `TestRawConfigStopsAtTheBoundary`, `TestEveryConfigFieldReachesTheSettings` |
+| Per-message logs go at Debug inside `if debugEnabled()` | Partly: the allocation tests fail on such a log in those four functions only if it allocates. Otherwise judgment (Logging, below) |
+| A log `msg` is a constant string, and docs and the alert table in `docs/guides/deploying-to-production.md` quote it exactly | sloglint `static-msg` in `.golangci.yml`; `TestAlertTableMatchesLogCalls`, `TestDocsQuoteLogMsgsExactly` |
+| Unit tests get a hub from `startTestHub` and a service from `newTestService` | `TestMain` in `hub_internal_test.go` fails the binary if a goroutine of the package outlives the tests |
+| `x_internal_test.go` sits beside `x.go`; a test helper has a caller | `TestInternalTestFilesNameASourceFile` (the name only); lint `unused`, since helpers are unexported in the package that uses them |
+| Production code reads the clock itself, never through the `allowAt` seam | `TestClockSeamIsTestOnly` |
+| A guard test (its comment says it `pins`, `guards` or `enforces`) fails under the bug it guards | `TestEveryGuardTestHasAMutant` and `TestGuardTestsKillTheirMutants` in `internal/mutation`, without `-race`; see `docs/guides/testing.md` |
+| Docs mirror code: the Go version in `go.mod`, tool pins in `ci.yml`, each env var the code reads (configuration reference, `.env.example`, `docker-compose.yml`, the test file beside its reader), named tests and helpers, Makefile targets | `TestGoVersionAgreesWithGoMod` and CI's `docker` job (`GOTOOLCHAIN=local`); `TestToolPinsAgreeWithCI`; `TestEnvVarsAreMirrored`; `TestDocIdentifiersExist`; `TestMakefileDocumentedTargetsHaveRules`, `TestMakefileDryRunsEveryDocumentedTarget` (skipped without `make`) |
+| `go.mod` and `go.sum` are tidy | CI's `test` job |
+| The only module dependency is `github.com/gorilla/websocket`, test-only and `golang.org/x/*` modules included, as the README states | Nothing: judgment |
+| The constants table in `docs/reference/configuration.md` and the performance table in `docs/architecture/overview.md` match the code; the rules below | Nothing: judgment |
+
+## Judgment rules
+
+- **Hub ownership.** Before changing `hub.go`, `client.go`, `lifecycle.go` or `service.go`, read `docs/architecture/overview.md`. Every send to the run loop (`register`, `unregister`, `publish`) and the write pump's select carry a `<-quit` case (the write pump reads it as `<-hub.stopping()`); any other blocking wait needs a bound of its own, as the overview's lifecycle section lists.
+- **Logging.** slog builds its arguments before it checks the level, so a per-message log outside `if debugEnabled()` costs every message. A WARN a client can trigger repeatedly logs once per episode, as the rate-limit warning does (`TestRateLimitWarnsOncePerEpisode` covers that one only). Renaming a log `msg` means updating the alert table.
 - **Scope.** Add an env var, `Config` field or log line only when the task asks for one, since each becomes documented contract. Report problems outside the task instead of fixing them. Remove helpers your own change leaves unused.
-- **Tests.** Before writing, moving or renaming a test, read `docs/guides/testing.md`: whether it belongs in `internal/server` or `test/integration`, the helpers, `t.Parallel()`, and waiting on `Hub.ClientCount()` instead of `time.Sleep`. Name an internal test file after the file it covers (`rate_limiter_internal_test.go`, not `rate_limiter_seam_test.go`).
-- **Clock seams.** Production code reads the clock itself; tests drive an `xAt(now)` variant, and a test that parses the package sources (`TestClockSeamIsTestOnly`) keeps production off it. A caller-supplied clock on the production path was tried and reverted: a time a caller chooses is a throttle a caller can loosen.
-- **Guard tests.** Mutation-check every test that guards an invariant: break the code, watch the test fail, restore. Several guard tests here first passed under their mutants. Say in the test's comment what it does not cover.
-- **Bug fixes** carry a test that fails before the fix. The commit body opens with `BUG FIX` and names the commit that introduced the bug when known.
 - **Claims.** Base every statement in a commit message, PR body, comment or doc on a command you ran or code you read, and say "not verified" otherwise. Overstated claims are this repo's most repeated correction; Docker and CI behaviour are where they have slipped through.
-- **Docs mirror code.** Update them in the same change:
-  - Go version: `go.mod`, `Dockerfile`, `README.md`, `CONTRIBUTING.md` and pages under `docs/` (`git grep` the old version). The builder image runs with `GOTOOLCHAIN=local`, so a stale Dockerfile tag fails the image build.
-  - Tool pins: golangci-lint in `.github/workflows/ci.yml`, `Makefile` and `CONTRIBUTING.md`; govulncheck in `ci.yml` and `Makefile`.
-  - Env var: `NewConfigFromEnv` in `config.go`, a case in `config_internal_test.go`, `docs/reference/configuration.md`, `.env.example` and `docker-compose.yml`.
-  - Compile-time constants: the table in `docs/reference/configuration.md`. A changed `allocs/op`: the performance table in `docs/architecture/overview.md`.
-- **Commits.** Conventional type, optional scope, capitalized imperative subject (`fix(security): Log a rate-limited client once per episode, not once per frame`); the body says why. One commit per item, each green on its own. Review fixes land as new commits (`fix: Address code review findings`), not amends.
-- **PRs** merge with a merge commit (`gh pr merge --merge`). The body follows `.github/pull_request_template.md` and lists the exact commands you ran with their results.
+- **Commits and PRs.** Conventional type, optional scope, capitalized imperative subject (`fix(security): Log a rate-limited client once per episode, not once per frame`); the body says why. One commit per item, each green on its own. Review fixes land as new commits (`fix: Address code review findings`), not amends. A bug fix carries a test that fails before the fix, and its body opens with `BUG FIX` and names the commit that introduced the bug when known. A PR body follows `.github/pull_request_template.md` and lists the exact commands you ran with their results.
 
 ## Gotchas
 
@@ -58,18 +59,16 @@ The lifecycle tests in `test/integration` listen on fixed ports 127.0.0.1:18082-
 
 ## Agent skills
 
-`.agents/skills/` holds only skills written for this repo. Generic skills are installed globally.
-
-- `verify-blip` launches its own server on a free loopback port, relays a message between two real WebSocket clients, checks Origin refusal, `/` and `/test`, and runs the race tests and lint. Run `.agents/skills/verify-blip/scripts/verify.sh all` and read its exit status. Evidence goes to `/tmp/blip-verify/<run>/`.
+`.agents/skills/` holds only skills written for this repo; generic skills are installed globally. `verify-blip` launches its own server on a free loopback port, relays a message between two real WebSocket clients, checks Origin refusal, `/` and `/test`, and runs the race tests and lint. Run `.agents/skills/verify-blip/scripts/verify.sh all` and read its exit status. Evidence goes to `/tmp/blip-verify/<run>/`.
 
 ## Cursor Cloud specific instructions
 
-- `.cursor/environment.json` installs the pinned toolchain and links it into `/usr/local/bin`: `go` and `gofmt` (version from the `go` line in `go.mod`), `golangci-lint` (the `version:` under the `golangci-lint-action` step in `.github/workflows/ci.yml`) and `govulncheck` (the `govulncheck@v…` in the same file).
+- `.cursor/environment.json` installs the pinned toolchain and links it into `/usr/local/bin`, reading `go` from `go.mod` and golangci-lint and govulncheck from `.github/workflows/ci.yml`. To bump a tool, change only those files; never hard-code a version in `environment.json`.
 - The gate is `.agents/skills/verify-blip/scripts/verify.sh all`: race tests, lint, govulncheck, then a live server relay. Done means its last line is `RESULT: PASS (all)`.
-- To bump a tool, change only `go.mod` or `.github/workflows/ci.yml`; the install reads its versions from there. Never hard-code a version in `environment.json`.
 
 ## Docs
 
+- Before writing, moving or renaming a test, read `docs/guides/testing.md`.
 - Before changing anything a client observes (message format, close behaviour, limits), read `docs/reference/api.md`.
 - Before touching origin checks, size or rate limits, or the `/test` page, read `docs/guides/security-hardening.md` and `SECURITY.md`.
 - Before dependency, tooling, CI or Docker work, or before fixing a known problem outside your task, read section 7 ("Needs decision") of PR #17 (`gh pr view 17 -R maltemindedal/blip`): the owner's backlog of pending decisions.

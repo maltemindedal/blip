@@ -24,8 +24,8 @@ func TestRateLimitWarnsOncePerEpisode(t *testing.T) {
 	// can be built without them — through newClient, so its limiter and the
 	// limits it logs come from one resolved config, as they do in production.
 	const burst = 2
-	cfg := resolveConfig(&Config{RateLimit: RateLimitConfig{Burst: burst, RefillInterval: time.Hour}})
-	c := newClient(nil, nil, "203.0.113.7:4242", &cfg)
+	s := resolveConfig(&Config{RateLimit: RateLimitConfig{Burst: burst, RefillInterval: time.Hour}})
+	c := newClient(nil, nil, "203.0.113.7:4242", &s)
 	warnings := func() int { return strings.Count(logs.String(), "rate limit exceeded; discarding message") }
 
 	for i := range burst {
