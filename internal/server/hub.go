@@ -34,6 +34,9 @@ type clientConn interface {
 }
 
 // Hub manages all WebSocket client connections and handles message broadcasting.
+//
+// The zero value is not usable: its channels are nil, so [Hub.ClientCount] on
+// one blocks forever. The only working Hub is the one [Service.Hub] returns.
 type Hub struct {
 	settings settings
 
@@ -43,11 +46,10 @@ type Hub struct {
 
 	countReq chan chan int
 
-	wg sync.WaitGroup
-
 	quit         chan struct{}
 	shutdownOnce sync.Once
 	done         chan struct{}
+	clientsDone  chan struct{}
 }
 
 func startHub(s settings) *Hub {
@@ -59,6 +61,7 @@ func startHub(s settings) *Hub {
 		countReq:      make(chan chan int),
 		quit:          make(chan struct{}),
 		done:          make(chan struct{}),
+		clientsDone:   make(chan struct{}),
 	}
 
 	go h.run()
@@ -149,6 +152,11 @@ func (h *Hub) IsStopped() bool {
 }
 
 func (h *Hub) run() {
+	var serving sync.WaitGroup
+	defer func() {
+		serving.Wait()
+		close(h.clientsDone)
+	}()
 	defer close(h.done)
 
 	reg := newRegistry()
@@ -161,8 +169,7 @@ func (h *Hub) run() {
 
 		case client := <-h.registerReq:
 			reg.add(client)
-
-			h.wg.Go(client.serve)
+			serving.Go(client.serve)
 
 		case client := <-h.unregisterReq:
 			reg.remove(client)
@@ -255,13 +262,7 @@ func (h *Hub) shutdown(ctx context.Context) error {
 		return err
 	}
 
-	clientsDone := make(chan struct{})
-	go func() {
-		h.wg.Wait()
-		close(clientsDone)
-	}()
-
-	if err := awaitStage(ctx, clientsDone, "client"); err != nil {
+	if err := awaitStage(ctx, h.clientsDone, "client"); err != nil {
 		return err
 	}
 

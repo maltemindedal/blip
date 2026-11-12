@@ -524,6 +524,46 @@ func TestHubShutdownIsIdempotent(t *testing.T) {
 	}
 }
 
+// servingClient is a fake whose serve stays busy until released, as a real
+// client's does while its pumps run.
+type servingClient struct {
+	*fakeClient
+	release chan struct{}
+}
+
+func (c *servingClient) serve() { <-c.release }
+
+// TestHubShutdownWaitsForItsClients pins that shutdown does not report success
+// while a client it started is still running: it returns the client-stage
+// timeout, and succeeds once the client has finished.
+//
+// It does not cover a real client's pumps exiting when their connection is
+// closed; the integration shutdown tests do.
+func TestHubShutdownWaitsForItsClients(t *testing.T) {
+	t.Parallel()
+
+	h := startTestHub(t, nil)
+	client := &servingClient{fakeClient: newFakeClient("busy", sendBufferSz), release: make(chan struct{})}
+	if !h.register(context.Background(), client) {
+		t.Fatal("register refused a client on a running hub")
+	}
+	if count := h.ClientCount(); count != 1 {
+		t.Fatalf("expected 1 client, got %d", count)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	err := h.shutdown(ctx)
+	if err == nil || !strings.Contains(err.Error(), "client shutdown timed out") {
+		t.Errorf("shutdown with a client still running returned %v, want the client-stage timeout", err)
+	}
+
+	close(client.release)
+	if err := shutdownHub(t, h); err != nil {
+		t.Errorf("shutdown after the client finished returned an error: %v", err)
+	}
+}
+
 // TestHubClientCountAfterShutdown verifies that ClientCount stops blocking once
 // the event loop has exited.
 func TestHubClientCountAfterShutdown(t *testing.T) {

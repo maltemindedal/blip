@@ -180,6 +180,16 @@ var mutants = []mutant{
 		Kills: []string{"TestServeStopsAcceptingBeforeItStopsTheHub"},
 	},
 	{
+		Name:   "hub shutdown does not wait for its clients",
+		Origin: "no commit; deleting the Wait passed every test when the WaitGroup moved into the run loop",
+		Edits: []edit{{
+			File: "internal/server/hub.go",
+			Old:  "\t\tserving.Wait()\n",
+			New:  "",
+		}},
+		Kills: []string{"TestHubShutdownWaitsForItsClients"},
+	},
+	{
 		Name:   "each broadcast copies the client set before the fan-out",
 		Origin: "8d84659 removed the per-message client snapshot from the broadcast path",
 		Edits: []edit{{
