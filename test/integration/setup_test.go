@@ -127,7 +127,7 @@ func newTestServer(t *testing.T) (*testService, *server.Hub) {
 // configured by customize, so both the client counts and the settings a test
 // observes belong to that test alone. It is stopped when the test ends.
 //
-// The hub owns its configuration, so that configuration has to exist before the
+// New resolves the configuration, so that configuration has to exist before the
 // service does: the listener is opened first and its URL is already on the
 // allow-list when customize runs. A customize that replaces AllowedOrigins
 // outright is testing the allow-list itself, and overrides that.
@@ -158,10 +158,8 @@ func newConfiguredTestServer(t *testing.T, customize func(cfg *server.Config)) (
 		}
 	})
 
-	// ClientCount is answered by the hub's run loop, so a reply proves Serve has
-	// started it; the listener is already open, so dials queue until it accepts.
-	svc.Hub().ClientCount()
-
+	// No wait is needed before returning: New started the hub, and the listener
+	// is already open, so dials queue until Serve accepts them.
 	return svcTest, svc.Hub()
 }
 

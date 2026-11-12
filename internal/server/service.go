@@ -25,9 +25,13 @@ type Service struct {
 	httpServer *http.Server
 }
 
-// New assembles the service described by cfg without starting anything. The raw
-// Config goes no further than this call: everything past it reads the settings
-// cfg resolves to.
+// New resolves cfg, starts the hub that will run under it, and builds the HTTP
+// server in front of that hub. The raw Config goes no further than this call:
+// everything past it reads the settings cfg resolves to.
+//
+// The hub is running when New returns, and [Service.Run] or [Service.Serve] is
+// what stops it, on every way out. A Service that is built and never run leaves
+// its hub's goroutine behind, so follow every New with one of the two.
 func New(cfg *Config) *Service {
 	return newService(resolveConfig(cfg))
 }
@@ -35,7 +39,8 @@ func New(cfg *Config) *Service {
 // newService is New past the configuration boundary: it has the settings and
 // no Config to read a raw value from by mistake.
 func newService(s settings) *Service {
-	hub := newHub(s)
+	hub := startHub(s)
+	log().Info("hub started and ready to manage WebSocket connections")
 
 	return &Service{
 		hub: hub,
@@ -70,10 +75,10 @@ func (s *Service) Run(ctx context.Context) error {
 	return s.serve(ctx, addr, func() (net.Listener, error) { return net.Listen("tcp", addr) })
 }
 
-// Serve starts the hub and serves HTTP on ln, which it closes before returning,
-// until ln fails or ctx is done. It exists for a caller that needs the address
-// before the service is built, such as a test listening on an ephemeral port
-// whose own origin has to be on the allow-list.
+// Serve serves HTTP on ln, which it closes before returning, until ln fails or
+// ctx is done. It exists for a caller that needs the address before the service
+// is built, such as a test listening on an ephemeral port whose own origin has
+// to be on the allow-list.
 //
 // However serving ends, the HTTP server and then the hub are drained, so
 // nothing outlives the call. A listener failure is returned wrapped, joined
@@ -92,9 +97,6 @@ func (s *Service) Serve(ctx context.Context, ln net.Listener) error {
 // Anything else this service starts goes in this list, where it is drained on
 // every path.
 func (s *Service) serve(ctx context.Context, addr string, listen func() (net.Listener, error)) error {
-	s.hub.start()
-	log().Info("hub started and ready to manage WebSocket connections")
-
 	return supervise(ctx,
 		func() error {
 			ln, err := listen()

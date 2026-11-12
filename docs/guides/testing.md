@@ -140,9 +140,14 @@ Follow the conventions already in the suite:
 - Cover the failure path, not just the happy one — most bugs in this codebase live in error handling
   and shutdown ordering.
 - Own your state, then run in parallel. Nothing configurable is process-wide: give a unit test its own
-  hub with `startTestHub(t, cfg)`, or an integration test a whole service of its own with
-  `newConfiguredTestServer`, so both the client counts and the settings it observes belong
-  to it alone. A test that does that should call `t.Parallel()`. The one thing still shared by the
+  hub with `startTestHub(t, cfg)` or its own service with `newTestService(t, cfg)`, or an integration
+  test a whole service of its own with `newConfiguredTestServer`, so both the client counts and the
+  settings it observes belong to it alone. `startTestHub` and `newTestService` are the only way a
+  unit test gets a hub or a service, because both register the shutdown: a hub is running from the
+  moment it exists. `TestMain` in `hub_internal_test.go` fails the test binary, with the stacks, if
+  any goroutine of `internal/server` is still running after the tests finish, so a test that calls
+  `startHub` or `New` directly and leaves the hub running fails the run even though it passes. The
+  integration suite has no such check. A test that does that should call `t.Parallel()`. The one thing still shared by the
   process is the logger, so `TestShutdownStopsAcceptingBeforeDrainingClients` — which reads the
   shutdown ordering off `server.SetLogger` — stays serial. Fixed listen ports are fine in parallel as
   long as no two tests pick the same one.
@@ -168,11 +173,11 @@ the benchmarks execute. The benchmarks live alongside the code they measure, in
 `internal/server/*_internal_test.go`, because they exercise unexported hot paths: broadcast fan-out,
 message normalization, the rate limiter, and origin checks.
 
-`BenchmarkHubBroadcast` builds its client set with `newBenchHub`, which installs fakes through the
-hub's own registration path rather than writing the client map behind its back, so the fan-out it
-times runs over a map the hub assembled itself. It deliberately leaves the event loop unstarted and
-calls the fan-out directly: that keeps the client map owned by the one goroutine touching it and
-keeps channel handoff and pump scheduling out of the number.
+`BenchmarkHubBroadcast` builds its client set with `newBenchRegistry`, which adds fakes to a bare
+`registry` the way the run loop adds them, so the fan-out it times runs over a map assembled by the
+production code. There is no hub and no event loop: the benchmark goroutine is the only one using
+that registry, and it calls `handleBroadcast` directly, which keeps channel handoff and pump
+scheduling out of the number.
 
 They assert allocation counts implicitly rather than wall-clock time — the numbers move with the
 machine, but a path that was allocation-free and stops being so is a regression worth catching. Run

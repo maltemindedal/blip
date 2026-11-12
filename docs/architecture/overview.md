@@ -55,28 +55,33 @@ package comment on each file describes that file's slice of responsibility.
 
 ## Components
 
-**Service** (`service.go`) — the whole running server behind `New` and `Run`. `New(cfg)` builds the
-hub, the routes bound to it, and the `http.Server` that fronts them; `Serve(ctx, ln)` starts them on
-a listener and drains them however serving ends, and `Run(ctx)` does the same on a listener it
+**Service** (`service.go`) — the whole running server behind `New` and `Run`. `New(cfg)` starts the
+hub and builds the routes bound to it and the `http.Server` that fronts them; `Serve(ctx, ln)` serves
+on a listener and drains the service however serving ends, and `Run(ctx)` does the same on a listener it
 opens on the configured port. `Serve` is exported for a caller that needs the address
 before the service is built. Nothing else is
-exported from the lifecycle — the hub's own `start` and `shutdown` are unexported — so the shutdown
+exported from the lifecycle — the hub's own `startHub` and `shutdown` are unexported — so the shutdown
 ordering below cannot be got wrong by a caller, including a test, which is why the integration tests
 drive the real thing rather than a copy of it. What the package exports is that service, the
 `Config` it is built from, the logger setup `main` calls, the `Message` wire type, the
 `HealthResponse` body that `/` serves, and, through `Service.Hub()`, two read-only views of the hub
 (`ClientCount`, `IsStopped`) for tests to observe. `Hub` has no exported constructor: its zero value
-is unusable, so the only working one is the one `Service.Hub()` returns, and even that one's
-`ClientCount` blocks until `Run` or `Serve` has started its run loop.
+is unusable, so the only working one is the one `Service.Hub()` returns, which is running from the
+moment `New` returns. `Run` or `Serve` is what stops it, so a `Service` that is built and never run
+leaves its hub's goroutine behind.
 
 **Hub** (`hub.go`) — owns the set of connected clients and the settings they run under.
-`newHub(s)` keeps the resolved settings it is given, so the origin allow-list, the message
-size limit, and the rate limit belong to that hub rather than to the process. `start()` launches a
-single goroutine — the hub's run loop — which selects over five channels: `registerReq`,
-`unregisterReq`, `broadcast`, `countReq`, and `quit`.
+`startHub(s)` is the only constructor. It keeps the resolved settings it is given, so the origin
+allow-list, the message size limit, and the rate limit belong to that hub rather than to the
+process, and it launches a single goroutine — the hub's run loop — before it returns. A hub
+therefore has two states, running and stopped, and `shutdown` is the only transition: there is no
+built-but-unstarted hub to forget to start or to shut down too early. The run loop selects over
+five channels: `registerReq`, `unregisterReq`, `broadcast`, `countReq`, and `quit`.
 
-That goroutine is the *sole* owner of the client map: registration, unregistration, fan-out, and
-shutdown all happen inside the run loop, so the map needs no lock at all. Broadcasts iterate the map
+That goroutine is the *sole* owner of the client map, and the code says so: the map lives in a
+`registry` held in a local variable of the run loop, not in a field of `Hub`, so no other function
+can name it. Registration, unregistration, fan-out, and shutdown all happen inside the run loop, so
+the map needs no lock at all. Broadcasts iterate the map
 directly instead of copying it, and the slice of failed clients is scratch space reused across
 messages, which makes the fan-out path allocation-free. The rule that keeps this sound is simple:
 every mutation of the client set must arrive through one of the hub's channels.
@@ -221,10 +226,9 @@ its messages being queued indefinitely.
 `main` supplies the logger, the config, and a context cancelled on `SIGINT`/`SIGTERM`, then calls
 `Run`. It holds no lifecycle logic of its own, so the ordering below is reachable from a test.
 
-**Startup** (`New`, then `Run`): `New` resolves the config and hands the settings to the hub,
+**Startup** (`New`, then `Run`): `New` resolves the config, starts the hub under the settings,
 builds the mux, and constructs the `http.Server` with 15s read/write and 60s idle timeouts. `Run`
-and `Serve` both go through one unexported `serve`, which starts the hub goroutine and then calls
-`supervise` with two things: a function that is the serving itself, and the ordered list of drain
+and `Serve` both go through one unexported `serve`, which calls `supervise` with two things: a function that is the serving itself, and the ordered list of drain
 stages. For `Run` the serving function opens the listener on the configured port and then calls
 `http.Server.Serve`; for `Serve` the listener is the caller's. Calling `Serve` directly is how the
 integration tests run a real service on an ephemeral port whose origin they know before the service
@@ -270,7 +274,7 @@ deadline; `supervise`'s last receive from its serving goroutine completes once
 
 | Goroutine         | Count            | Lifetime                      | Started by                                 |
 | ----------------- | ---------------- | ----------------------------- | ------------------------------------------ |
-| Hub run loop      | 1                | Process lifetime              | `Hub.start`                                |
+| Hub run loop      | 1                | Process lifetime              | `startHub`, which `New` calls              |
 | Client read pump  | 1 per connection | Until read error or shutdown  | Hub run loop, via `serve`                  |
 | Client write pump | 1 per connection | Until send closed or shutdown | `wsClient.serve`                           |
 | HTTP serving      | 1                | Process lifetime              | `supervise`, for `Run` and `Serve`         |

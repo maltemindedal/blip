@@ -2,18 +2,72 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
+	"reflect"
+	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 )
 
-// TestMain silences server logging so benchmark output stays readable.
+// TestMain silences server logging so benchmark output stays readable, and
+// fails the binary if a goroutine of this package outlives the tests: a hub's
+// run loop, a client's pumps, or a serving goroutine that a test started and
+// never stopped. It catches the leak however the test was written.
+//
+// It names the leaked goroutine's stack, not the test that started it. It is
+// test code, so no mutant in internal/mutation can break it; it was checked by
+// adding a test that starts a hub and never shuts it down.
 func TestMain(m *testing.M) {
 	SetLogger(slog.New(slog.DiscardHandler))
-	os.Exit(m.Run())
+
+	code := m.Run()
+	if leaked := leakedGoroutines(5 * time.Second); leaked != "" && code == 0 {
+		fmt.Fprintf(os.Stderr, "FAIL: goroutines of this package were still running after the tests finished.\n"+
+			"Get hubs from startTestHub and services from newTestService, which register the\n"+
+			"shutdown, instead of calling startHub or New directly. Bisect with -run.\n\n%s\n", leaked)
+		code = 1
+	}
+
+	os.Exit(code)
+}
+
+// leakedGoroutines returns the stacks of the goroutines still running this
+// package's code, or "" once there are none. A goroutine that has just been
+// told to stop may need a moment, so it polls until wait has passed.
+//
+// It matches by package path, so it survives a rename of any one function. It
+// does not see a goroutine parked wholly inside another package, such as an
+// http.Server's accept loop.
+func leakedGoroutines(wait time.Duration) string {
+	pkg := reflect.TypeFor[Hub]().PkgPath() + "."
+	deadline := time.Now().Add(wait)
+
+	for {
+		buf := make([]byte, 1<<20)
+		buf = buf[:runtime.Stack(buf, true)]
+
+		var leaked []string
+		// The first stack is the calling goroutine's, which runs TestMain.
+		for _, stack := range strings.Split(string(buf), "\n\n")[1:] {
+			if strings.Contains(stack, pkg) {
+				leaked = append(leaked, stack)
+			}
+		}
+
+		if len(leaked) == 0 {
+			return ""
+		}
+		if time.Now().After(deadline) {
+			return strings.Join(leaked, "\n\n")
+		}
+
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 // fakeClient is the test-side [clientConn]: an inbox and an address, with no
@@ -63,35 +117,23 @@ func drain(f *fakeClient) (got [][]byte, closed bool) {
 // machine.
 const hubShutdownBudget = 5 * time.Second
 
-// startTestHub runs a hub's event loop under cfg and shuts it down when the test
-// ends. It returns once the loop is provably serving requests, so no caller has
-// to sleep before using the hub. A nil cfg gives the hub the defaults.
+// startTestHub is the one way a test gets a hub: running under cfg, and shut
+// down when the test ends. A nil cfg gives the hub the defaults.
 func startTestHub(t *testing.T, cfg *Config) *Hub {
 	t.Helper()
 
-	h := newHub(resolveConfig(cfg))
-	h.start()
+	h := startHub(resolveConfig(cfg))
 
-	// ClientCount is answered by the run loop, so a reply proves it is up and has
-	// processed everything queued before this point.
-	h.ClientCount()
-
-	shutdownAtCleanup(t, h)
-	return h
-}
-
-// shutdownAtCleanup shuts h down when the test ends, so a test that fails before
-// its own shutdown does not leave the run loop running for the rest of the test
-// binary. shutdown is idempotent, so a test that has already shut h down loses
-// nothing.
-func shutdownAtCleanup(t *testing.T, h *Hub) {
-	t.Helper()
-
+	// A test that fails before its own shutdown must not leave the run loop
+	// running for the rest of the test binary. shutdown is idempotent, so a test
+	// that has already shut h down loses nothing.
 	t.Cleanup(func() {
 		if err := shutdownHub(t, h); err != nil {
 			t.Errorf(shutdownErrorMsg, err)
 		}
 	})
+
+	return h
 }
 
 const shutdownErrorMsg = "Failed to shutdown hub: %v"
@@ -118,29 +160,26 @@ func registerFake(t *testing.T, h *Hub, addr string, buffer int) *fakeClient {
 	return c
 }
 
-// newBenchHub builds a hub holding n clients installed through the hub's own
-// registration path, so the benchmark measures the fan-out over a client set
-// the hub assembled itself. The run loop is deliberately left unstarted: the
-// benchmark calls handleBroadcast directly, which keeps the client map owned by
-// the one goroutine touching it and keeps pump scheduling out of the number.
-func newBenchHub(tb testing.TB, n int) (*Hub, []*fakeClient) {
-	tb.Helper()
-
-	h := newHub(resolveConfig(nil))
+// newBenchRegistry builds a registry holding n clients added the way the run
+// loop adds them. There is no hub and no goroutine: the registry is the whole
+// fan-out, and the benchmark is the one goroutine using it, which keeps pump
+// scheduling out of the number.
+func newBenchRegistry(n int) (*registry, []*fakeClient) {
+	r := newRegistry()
 	clients := make([]*fakeClient, n)
 
 	for i := range clients {
 		clients[i] = newFakeClient("bench-"+strconv.Itoa(i), sendBufferSz)
-		h.addClient(clients[i])
+		r.add(clients[i])
 	}
 
-	return h, clients
+	return r, clients
 }
 
 func BenchmarkHubBroadcast(b *testing.B) {
 	for _, n := range []int{10, 100, 1000} {
 		b.Run(strconv.Itoa(n)+"clients", func(b *testing.B) {
-			h, clients := newBenchHub(b, n)
+			r, clients := newBenchRegistry(n)
 			msg := broadcastMessage{
 				Sender:  clients[0],
 				Payload: []byte(`{"content":"hello everyone"}`),
@@ -149,18 +188,18 @@ func BenchmarkHubBroadcast(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 			for b.Loop() {
-				h.handleBroadcast(msg)
+				r.handleBroadcast(msg)
 
 				// Drain inline. A benchmark loop outruns any consumer
-				// goroutine, and the hub evicts clients whose buffers fill,
-				// which would shrink the fan-out mid-measurement.
+				// goroutine, and the registry evicts clients whose buffers
+				// fill, which would shrink the fan-out mid-measurement.
 				for _, c := range clients[1:] {
 					<-c.send
 				}
 			}
 
-			if len(h.clients) != n {
-				b.Fatalf("hub dropped clients during the benchmark: %d of %d remain", len(h.clients), n)
+			if len(r.clients) != n {
+				b.Fatalf("clients were dropped during the benchmark: %d of %d remain", len(r.clients), n)
 			}
 		})
 	}
@@ -427,32 +466,17 @@ func TestHubShutdownStopsTheEventLoop(t *testing.T) {
 	}
 }
 
-// TestHubShutdownBeforeStartIsNoOp verifies that shutting down a hub that never
-// ran succeeds instead of blocking on an event loop that does not exist.
-func TestHubShutdownBeforeStartIsNoOp(t *testing.T) {
-	t.Parallel()
-
-	hub := newHub(resolveConfig(nil))
-
-	if err := shutdownHub(t, hub); err != nil {
-		t.Errorf("Expected shutdown of an unstarted hub to succeed, got: %v", err)
-	}
-}
-
-// TestHubShutdownRightAfterStartStopsTheHub verifies that shutdown called
-// straight after start stops the event loop, instead of returning nil because
-// the loop's goroutine had not been scheduled yet and then leaving it running
-// for good. The hub is shut down at once, with no barrier in between, because
-// that is the case being pinned.
+// TestHubShutdownRightAfterStartStopsTheHub verifies that a shutdown issued
+// straight after the hub is started, before its run loop has been scheduled,
+// stops the loop rather than missing it. The hub is shut down at once, with no
+// barrier in between, because that is the case being pinned.
 func TestHubShutdownRightAfterStartStopsTheHub(t *testing.T) {
 	t.Parallel()
 
 	const rounds = 200
 
 	for range rounds {
-		hub := newHub(resolveConfig(nil))
-		shutdownAtCleanup(t, hub)
-		hub.start()
+		hub := startTestHub(t, nil)
 
 		if err := shutdownHub(t, hub); err != nil {
 			t.Fatalf(shutdownErrorMsg, err)
@@ -461,38 +485,6 @@ func TestHubShutdownRightAfterStartStopsTheHub(t *testing.T) {
 		if !hub.IsStopped() {
 			t.Fatal("Hub kept running after shutdown returned straight after start")
 		}
-	}
-}
-
-// TestHubStartTwiceRunsOneLoop verifies that start is idempotent: repeated and
-// concurrent calls run a single event loop, which one shutdown then stops. A
-// second loop would close the hub's done channel twice and panic.
-func TestHubStartTwiceRunsOneLoop(t *testing.T) {
-	t.Parallel()
-
-	hub := newHub(resolveConfig(nil))
-	shutdownAtCleanup(t, hub)
-
-	var wg sync.WaitGroup
-	for range 8 {
-		wg.Go(hub.start)
-	}
-	wg.Wait()
-	hub.start()
-
-	if got := hub.ClientCount(); got != 0 {
-		t.Fatalf("Expected no clients on a fresh hub, got %d", got)
-	}
-
-	if err := shutdownHub(t, hub); err != nil {
-		t.Fatalf(shutdownErrorMsg, err)
-	}
-	if !hub.IsStopped() {
-		t.Error("Hub kept running after shutdown")
-	}
-
-	if err := shutdownHub(t, hub); err != nil {
-		t.Errorf("Expected a second shutdown to succeed, got: %v", err)
 	}
 }
 

@@ -17,6 +17,23 @@ import (
 	"time"
 )
 
+// newTestService is the one way a test gets a [Service]: built from cfg, with
+// its hub shut down when the test ends. Run and Serve stop the hub themselves,
+// so the cleanup matters to a test that only inspects the service, or that
+// fails before it serves. A nil cfg gives the defaults.
+func newTestService(t *testing.T, cfg *Config) *Service {
+	t.Helper()
+
+	svc := New(cfg)
+	t.Cleanup(func() {
+		if err := shutdownHub(t, svc.hub); err != nil {
+			t.Errorf(shutdownErrorMsg, err)
+		}
+	})
+
+	return svc
+}
+
 // TestNewConfiguresHTTPServer pins the production HTTP server settings New
 // applies. They are not reachable from outside the package, so this is where
 // the timeouts and the header limit are asserted.
@@ -26,7 +43,7 @@ func TestNewConfiguresHTTPServer(t *testing.T) {
 	cfg := NewConfig()
 	cfg.Port = ":18090"
 
-	svc := New(cfg)
+	svc := newTestService(t, cfg)
 
 	if svc.Hub() == nil {
 		t.Fatal("New returned a service without a hub")
@@ -65,7 +82,7 @@ func TestNewConfiguresHTTPServer(t *testing.T) {
 func TestNewServesTheApplicationRoutes(t *testing.T) {
 	t.Parallel()
 
-	svc := New(NewConfig())
+	svc := newTestService(t, NewConfig())
 
 	rec := httptest.NewRecorder()
 	svc.httpServer.Handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
@@ -88,7 +105,7 @@ func TestProductionTimeoutsAllowSlowResponses(t *testing.T) {
 	// is the behavior under test, not a wait for something else to happen.
 	const handlerDelay = 2 * time.Second
 
-	production := New(NewConfig()).httpServer
+	production := newTestService(t, NewConfig()).httpServer
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/slow", func(w http.ResponseWriter, _ *http.Request) {
@@ -142,7 +159,7 @@ func TestNewListensOnTheResolvedPort(t *testing.T) {
 			cfg := NewConfig()
 			cfg.Port = tt.port
 
-			if got := New(cfg).httpServer.Addr; got != tt.want {
+			if got := newTestService(t, cfg).httpServer.Addr; got != tt.want {
 				t.Errorf("Expected addr %q for port %q, got %q", tt.want, tt.port, got)
 			}
 		})
@@ -168,7 +185,7 @@ func TestRunDrainsTheServiceWhenItCannotListen(t *testing.T) {
 
 	cfg := NewConfig()
 	cfg.Port = occupied.Addr().String()
-	svc := New(cfg)
+	svc := newTestService(t, cfg)
 
 	// A deadline, so a regression that lets the listen succeed fails here instead
 	// of blocking until the test binary times out.
@@ -207,7 +224,7 @@ func TestServeDrainsTheHubWhenTheListenerFails(t *testing.T) {
 	}
 	_ = ln.Close()
 
-	svc := New(nil)
+	svc := newTestService(t, nil)
 
 	// A deadline, so a regression that keeps serving fails here instead of
 	// blocking until the test binary times out.
@@ -268,7 +285,7 @@ func TestServeClosesItsListenerBeforeReturning(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 
-		if err := New(nil).Serve(ctx, rec); err != nil {
+		if err := newTestService(t, nil).Serve(ctx, rec); err != nil {
 			t.Fatalf("Serve returned %v after a cancelled context, want nil", err)
 		}
 		if !rec.closed.Load() {
@@ -299,7 +316,8 @@ func TestServeClosesOpenConnectionsWhenTheListenerFails(t *testing.T) {
 	defer cancel()
 
 	served := make(chan error, 1)
-	go func() { served <- New(nil).Serve(ctx, ln) }()
+	svc := newTestService(t, nil)
+	go func() { served <- svc.Serve(ctx, ln) }()
 
 	conn, err := net.Dial("tcp", ln.Addr().String())
 	if err != nil {
@@ -366,7 +384,7 @@ func TestServeStopsAcceptingBeforeItStopsTheHub(t *testing.T) {
 
 	inFlight := make(chan struct{})
 	release := make(chan struct{})
-	svc := New(nil)
+	svc := newTestService(t, nil)
 	svc.httpServer.Handler = http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		close(inFlight)
 		<-release
@@ -452,7 +470,7 @@ func TestServeReportsAListenerFailureThatRacesCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	serveErr := New(nil).Serve(ctx, &cancellingListener{Listener: ln, cancel: cancel, err: errBroken})
+	serveErr := newTestService(t, nil).Serve(ctx, &cancellingListener{Listener: ln, cancel: cancel, err: errBroken})
 
 	if !errors.Is(serveErr, errBroken) {
 		t.Errorf("Serve returned %v, want the listener's error", serveErr)
