@@ -12,6 +12,36 @@ package mutation
 // docs/guides/testing.md.
 var mutants = []mutant{
 	{
+		Name:   "SERVER_PORT is read but never applied",
+		Origin: "the test was added with test/repocheck's env-var cross-check",
+		Edits: []edit{{
+			File: "internal/server/config.go",
+			Old:  "\t\tcfg.Port = port\n",
+			New:  "\t\t_ = port\n",
+		}},
+		Kills: []string{"TestNewConfigFromEnvPort"},
+	},
+	{
+		Name:   "ALLOWED_ORIGINS is taken as one origin, not split on commas",
+		Origin: "the test was added with test/repocheck's env-var cross-check",
+		Edits: []edit{{
+			File: "internal/server/config.go",
+			Old:  "\t\tcfg.AllowedOrigins = parseOrigins(origins)\n",
+			New:  "\t\tcfg.AllowedOrigins = []string{origins}\n",
+		}},
+		Kills: []string{"TestNewConfigFromEnvAllowedOrigins"},
+	},
+	{
+		Name:   "LOG_LEVEL is not trimmed before it is parsed",
+		Origin: "the test was added with test/repocheck's env-var cross-check",
+		Edits: []edit{{
+			File: "internal/server/logging.go",
+			Old:  "\traw := strings.TrimSpace(os.Getenv(\"LOG_LEVEL\"))\n",
+			New:  "\traw := os.Getenv(\"LOG_LEVEL\")\n\t_ = strings.TrimSpace\n",
+		}},
+		Kills: []string{"TestLogLevelFromEnv"},
+	},
+	{
 		Name:   "resolveConfig drops a field added to Config",
 		Origin: "69d8b2d added a test that passed this mutant; 4bc4afd fixed it",
 		Edits: []edit{

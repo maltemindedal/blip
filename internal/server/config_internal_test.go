@@ -170,6 +170,62 @@ func TestNewConfigFromEnvMaxMessageSize(t *testing.T) {
 	}
 }
 
+// TestNewConfigFromEnvPort pins that SERVER_PORT is taken verbatim and that an
+// unset or empty one leaves the default. It does not check that the value is a
+// valid listen address; Service.Run reports that when it binds.
+//
+// t.Setenv rules out t.Parallel.
+func TestNewConfigFromEnvPort(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		want  string
+	}{
+		{name: "unset", want: defaultPort},
+		{name: "port only", value: ":9000", want: ":9000"},
+		{name: "host and port", value: "127.0.0.1:9000", want: "127.0.0.1:9000"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("SERVER_PORT", tc.value)
+
+			if got := NewConfigFromEnv().Port; got != tc.want {
+				t.Errorf("Port = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestNewConfigFromEnvAllowedOrigins pins that ALLOWED_ORIGINS is split on
+// commas with each entry trimmed, and that an unset one keeps the default list.
+// It checks the raw list on Config; which entries the origin policy then accepts
+// is TestResolveConfigRecordsTheEffectiveAllowList's job.
+//
+// t.Setenv rules out t.Parallel.
+func TestNewConfigFromEnvAllowedOrigins(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		want  []string
+	}{
+		{name: "unset", want: []string{defaultAllowedOrigin}},
+		{name: "single", value: "https://example.com", want: []string{"https://example.com"}},
+		{name: "several, trimmed", value: "https://a.example, https://b.example ,*",
+			want: []string{"https://a.example", "https://b.example", "*"}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("ALLOWED_ORIGINS", tc.value)
+
+			if got := NewConfigFromEnv().AllowedOrigins; !slices.Equal(got, tc.want) {
+				t.Errorf("AllowedOrigins = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestNewConfigFromEnvWarnsOnInvalidValues pins that a value falling back to the
 // default says so, naming the variable and echoing the raw value, and that a
 // usable or unset value stays silent. Without it, dropping the warning would
