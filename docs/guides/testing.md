@@ -142,13 +142,13 @@ Follow the conventions already in the suite:
 - Own your state, then run in parallel. Nothing configurable is process-wide: give a unit test its own
   hub with `startTestHub(t, cfg)` or its own service with `newTestService(t, cfg)`, or an integration
   test a whole service of its own with `newConfiguredTestServer`, so both the client counts and the
-  settings it observes belong to it alone. `startTestHub` and `newTestService` are the only way a
+  settings it observes belong to it alone. A test that owns its state should call `t.Parallel()`,
+  except an allocation test (see [Benchmarks](#benchmarks)). `startTestHub` and `newTestService` are the only way a
   unit test gets a hub or a service, because both register the shutdown: a hub is running from the
   moment it exists. `TestMain` in `hub_internal_test.go` fails the test binary, with the stacks, if
   any goroutine of `internal/server` is still running after the tests finish, so a test that calls
   `startHub` or `New` directly and leaves the hub running fails the run even though it passes. The
-  integration suite has no such check. A test that does that should call `t.Parallel()`, except an
-  allocation test (see [Benchmarks](#benchmarks)). The one thing still shared by the
+  integration suite has no such check. The one thing still shared by the
   process is the logger, so `TestShutdownStopsAcceptingBeforeDrainingClients` — which reads the
   shutdown ordering off `server.SetLogger` — stays serial. Fixed listen ports are fine in parallel as
   long as no two tests pick the same one.
