@@ -38,7 +38,7 @@ func TestGoVersionAgreesWithGoMod(t *testing.T) {
 					inDockerfile++
 				}
 				if got := mm[1] + mm[2]; got != want {
-					t.Errorf("%s:%d says Go %s but go.mod says %s. Edit %s to %s; go.mod is the source (AGENTS.md: Docs mirror code, Go version).",
+					t.Errorf("%s:%d says Go %s but go.mod says %s. Edit %s to %s; go.mod is the source.",
 						f, n, got, want, f, want)
 				}
 			}

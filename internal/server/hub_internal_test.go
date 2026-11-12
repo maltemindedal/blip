@@ -205,6 +205,28 @@ func BenchmarkHubBroadcast(b *testing.B) {
 	}
 }
 
+// TestHubBroadcastDoesNotAllocate pins the fan-out at zero allocations per
+// message, the figure BenchmarkHubBroadcast reports and nothing else asserts.
+// It cannot run in parallel: AllocsPerRun counts every allocation in the
+// process and panics inside a parallel test.
+//
+// It covers a fan-out where every inbox has room. Dropping a client with a full
+// inbox logs and removes it, and that path may allocate.
+func TestHubBroadcastDoesNotAllocate(t *testing.T) {
+	r, clients := newBenchRegistry(100)
+	msg := broadcastMessage{Sender: clients[0], Payload: []byte(`{"content":"hello everyone"}`)}
+
+	allocs := testing.AllocsPerRun(1000, func() {
+		r.handleBroadcast(msg)
+		for _, c := range clients[1:] {
+			<-c.send
+		}
+	})
+	if allocs != 0 {
+		t.Errorf("handleBroadcast allocates %v times per message, want 0", allocs)
+	}
+}
+
 // TestHubDropsClientWithAFullInbox pins the backpressure rule: fan-out is a
 // non-blocking send, and a client that cannot take a message is dropped from
 // the registry rather than allowed to stall the broadcast for everyone else.

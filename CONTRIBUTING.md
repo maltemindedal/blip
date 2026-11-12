@@ -93,7 +93,7 @@ Linters enabled in `.golangci.yml`, grouped as the file groups them:
 Formatting is enforced separately by the `formatters` block (`gofmt`, `goimports`).
 
 The repository also carries [`AGENTS.md`](AGENTS.md), guidance for AI coding assistants: the
-commands that mirror CI, the conventions reviews enforce, and the gotchas.
+commands that mirror CI, each rule with the check that enforces it, and the gotchas.
 
 ## Tests
 

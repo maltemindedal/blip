@@ -147,7 +147,8 @@ Follow the conventions already in the suite:
   moment it exists. `TestMain` in `hub_internal_test.go` fails the test binary, with the stacks, if
   any goroutine of `internal/server` is still running after the tests finish, so a test that calls
   `startHub` or `New` directly and leaves the hub running fails the run even though it passes. The
-  integration suite has no such check. A test that does that should call `t.Parallel()`. The one thing still shared by the
+  integration suite has no such check. A test that does that should call `t.Parallel()`, except an
+  allocation test (see [Benchmarks](#benchmarks)). The one thing still shared by the
   process is the logger, so `TestShutdownStopsAcceptingBeforeDrainingClients` — which reads the
   shutdown ordering off `server.SetLogger` — stays serial. Fixed listen ports are fine in parallel as
   long as no two tests pick the same one.
@@ -179,10 +180,15 @@ production code. There is no hub and no event loop: the benchmark goroutine is t
 that registry, and it calls `handleBroadcast` directly, which keeps channel handoff and pump
 scheduling out of the number.
 
-They assert allocation counts implicitly rather than wall-clock time — the numbers move with the
-machine, but a path that was allocation-free and stops being so is a regression worth catching. Run
-`go test -bench . -benchmem ./internal/...` before and after a change to the hot path and compare
-the `allocs/op` column.
+The benchmarks assert nothing: they report time and `allocs/op`, and a regression in either still
+passes. Four tests beside them assert the allocation counts with `testing.AllocsPerRun`:
+`TestHubBroadcastDoesNotAllocate`, `TestRateLimiterAllowDoesNotAllocate` and
+`TestOriginCheckDoesNotAllocate` require 0 allocations, and
+`TestNormalizeMessageAllocatesOnlyThePayload` allows 1, the payload itself. They run in the `test`
+job with `-race`, which gives the same counts as a run without it, and each has a mutant in
+`internal/mutation`. They do not call `t.Parallel()`, because `AllocsPerRun` counts every
+allocation in the process and panics inside a parallel test. Each covers the path its benchmark
+times, not the slow paths beside it, such as a message that needs the JSON round trip.
 
 ## Repository checks
 

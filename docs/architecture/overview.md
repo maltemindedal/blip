@@ -288,7 +288,9 @@ lives.
 
 The hot paths are the ones that run per message, and all three are allocation-free or close to it.
 Measured with `make bench` on an AMD Ryzen 7 7800X3D; treat the absolute numbers as machine-specific
-and the allocation counts as the durable part.
+and the allocation counts as the durable part. Tests fail if the fan-out, rate limit check or origin
+check allocates, or if canonical normalization allocates more than once (see
+[Testing](../guides/testing.md#benchmarks)); the slow path's count is not checked.
 
 | Path                                | Cost                    | Notes                                        |
 | ----------------------------------- | ----------------------- | -------------------------------------------- |

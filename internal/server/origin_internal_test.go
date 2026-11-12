@@ -70,3 +70,25 @@ func BenchmarkOriginCheck(b *testing.B) {
 		}
 	}
 }
+
+// TestOriginCheckDoesNotAllocate pins the handshake's origin check at zero
+// allocations for the already-canonical header a browser sends. It cannot run
+// in parallel: AllocsPerRun counts every allocation in the process and panics
+// inside a parallel test.
+//
+// It covers an allowed, canonical origin. A header that needs normalizing parses
+// a URL, and a rejected one logs; both may allocate.
+func TestOriginCheckDoesNotAllocate(t *testing.T) {
+	policy := newOriginPolicy([]string{"http://localhost:8080", "https://example.com"})
+	req := httptest.NewRequest(http.MethodGet, "/ws", nil)
+	req.Header.Set("Origin", "https://example.com")
+
+	allocs := testing.AllocsPerRun(1000, func() {
+		if !policy.checkOrigin(req) {
+			t.Fatal("expected origin to be allowed")
+		}
+	})
+	if allocs != 0 {
+		t.Errorf("checkOrigin allocates %v times per handshake, want 0", allocs)
+	}
+}

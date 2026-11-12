@@ -189,4 +189,45 @@ var mutants = []mutant{
 		}},
 		Kills: []string{"TestServeStopsAcceptingBeforeItStopsTheHub"},
 	},
+	{
+		Name:   "each broadcast copies the client set before the fan-out",
+		Origin: "8d84659 removed the per-message client snapshot from the broadcast path",
+		Edits: []edit{{
+			File: "internal/server/hub.go",
+			Old:  "\tfor client, inbox := range r.clients {\n",
+			New: "\tsnapshot := make([]clientConn, 0, len(r.clients))\n\tfor c := range r.clients {\n" +
+				"\t\tsnapshot = append(snapshot, c)\n\t}\n\tfor _, client := range snapshot {\n\t\tinbox := r.clients[client]\n",
+		}},
+		Kills: []string{"TestHubBroadcastDoesNotAllocate"},
+	},
+	{
+		Name:   "every message takes the JSON round trip",
+		Origin: "8d84659 added the canonical fast path; without it a canonical message allocates 7 times",
+		Edits: []edit{{
+			File: "internal/server/message_json.go",
+			Old:  "\tif isCanonicalMessage(raw) {\n",
+			New:  "\tif false && isCanonicalMessage(raw) {\n",
+		}},
+		Kills: []string{"TestNormalizeMessageAllocatesOnlyThePayload"},
+	},
+	{
+		Name:   "every origin check parses a URL",
+		Origin: "8d84659 added the canonical-origin fast path, taking the check from 2 allocations to 0",
+		Edits: []edit{{
+			File: "internal/server/origin.go",
+			Old:  "\tif _, exists := p.origins[origin]; exists {\n",
+			New:  "\tif _, exists := p.origins[origin]; false && exists {\n",
+		}},
+		Kills: []string{"TestOriginCheckDoesNotAllocate"},
+	},
+	{
+		Name:   "the rate limiter logs every check without the debugEnabled guard",
+		Origin: "no commit; the per-message log AGENTS.md's logging rule forbids, replayed on the limiter",
+		Edits: []edit{{
+			File: "internal/server/rate_limiter.go",
+			Old:  "\treturn rl.allowAt(time.Now())\n",
+			New:  "\tok := rl.allowAt(time.Now())\n\tlog().Debug(\"rate limit check\", \"allowed\", ok, \"tokens\", rl.tokens)\n\treturn ok\n",
+		}},
+		Kills: []string{"TestRateLimiterAllowDoesNotAllocate"},
+	},
 }

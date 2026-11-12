@@ -10,7 +10,7 @@ import (
 
 // TestInternalTestFilesNameASourceFile fails for a test file under internal/
 // whose name matches no source file in its directory: `x_test.go` and
-// `x_internal_test.go` need an `x.go` beside them (AGENTS.md: Tests).
+// `x_internal_test.go` need an `x.go` beside them.
 //
 // A test-only package, such as internal/mutation, has no source file to name
 // and is skipped. It checks the name only, not that the tests in the file

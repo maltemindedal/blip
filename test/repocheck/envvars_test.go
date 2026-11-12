@@ -59,7 +59,7 @@ func envVarsInCode(t *testing.T) map[string]string {
 // TestEnvVarsAreMirrored fails when an environment variable the code reads is
 // missing from the configuration reference, .env.example, docker-compose.yml or
 // the internal test file beside the source file that reads it, or when one of the first three names a variable the
-// code does not read (AGENTS.md: Docs mirror code, Env var).
+// code does not read.
 //
 // It finds reads with a string literal in a call whose name contains "env". A
 // variable read through a constant or built from parts is not seen, and it

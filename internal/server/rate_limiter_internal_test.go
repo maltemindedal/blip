@@ -369,3 +369,18 @@ func BenchmarkRateLimiterAllow(b *testing.B) {
 		rl.allow()
 	}
 }
+
+// TestRateLimiterAllowDoesNotAllocate pins the read pump's per-message check,
+// clock read included, at zero allocations. It cannot run in parallel:
+// AllocsPerRun counts every allocation in the process and panics inside a
+// parallel test.
+//
+// It covers a limiter with tokens to spare, not one that is refusing messages.
+func TestRateLimiterAllowDoesNotAllocate(t *testing.T) {
+	rl := newRateLimiter(1_000_000, time.Second)
+
+	allocs := testing.AllocsPerRun(1000, func() { rl.allow() })
+	if allocs != 0 {
+		t.Errorf("allow allocates %v times per call, want 0", allocs)
+	}
+}

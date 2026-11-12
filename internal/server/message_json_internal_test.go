@@ -157,6 +157,26 @@ func BenchmarkNormalizeMessage(b *testing.B) {
 	}
 }
 
+// TestNormalizeMessageAllocatesOnlyThePayload pins a canonical message at one
+// allocation, the copy normalizeMessage returns. It cannot run in parallel:
+// AllocsPerRun counts every allocation in the process and panics inside a
+// parallel test.
+//
+// It covers the canonical fast path only. A message that needs the JSON round
+// trip allocates more, and nothing bounds by how much.
+func TestNormalizeMessageAllocatesOnlyThePayload(t *testing.T) {
+	raw := []byte(`{"content":"the quick brown fox jumps over the lazy dog"}`)
+
+	allocs := testing.AllocsPerRun(1000, func() {
+		if _, err := normalizeMessage(raw); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if allocs > 1 {
+		t.Errorf("normalizeMessage allocates %v times for a canonical message, want 1", allocs)
+	}
+}
+
 // BenchmarkNormalizeMessageStdlib is the previous implementation, kept as a
 // baseline for the encoder above.
 func BenchmarkNormalizeMessageStdlib(b *testing.B) {
