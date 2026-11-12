@@ -155,7 +155,7 @@ func positiveIntFromEnv[T int | int64](name string, fallback T, limit int64) T {
 
 	parsed, err := strconv.ParseInt(raw, 10, 64)
 	if err != nil || parsed <= 0 || parsed > limit || int64(T(parsed)) != parsed {
-		log().Warn("invalid "+name+"; using default", "value", raw, "default", fallback)
+		log().Warn("invalid "+name+"; using default", "value", raw, "default", fallback) //nolint:sloglint // per-variable msg is the operator string shown in docs/reference/configuration.md
 		return fallback
 	}
 

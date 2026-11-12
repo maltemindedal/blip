@@ -49,10 +49,11 @@ linters:
         - unusedwrite
         - sortslice
     sloglint:
-      # Attributes must be key-value pairs; keys are static snake_case strings.
+      # Attributes must be key-value pairs; keys are static snake_case strings,
+      # and so is the msg, so an alert or doc that quotes it keeps matching.
       kv-only: true
       key-naming-case: snake
-      static-msg: false
+      static-msg: true
     nolintlint:
       require-explanation: true
       require-specific: true
