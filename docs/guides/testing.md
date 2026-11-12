@@ -10,6 +10,7 @@ service as a client sees it.
 ```
 internal/server/
 └── *_internal_test.go       # package server — unit tests and benchmarks, one file per source file
+internal/mutation/           # test-only — past mistakes as mutants the guard tests must fail
 test/
 ├── integration/             # package integration — a real Service over real sockets
 │   ├── setup_test.go            # shared plumbing: test services, dialing, assertions
@@ -171,6 +172,33 @@ They assert allocation counts implicitly rather than wall-clock time — the num
 machine, but a path that was allocation-free and stops being so is a regression worth catching. Run
 `go test -bench . -benchmem ./internal/...` before and after a change to the hot path and compare
 the `allocs/op` column.
+
+## Guard tests and mutants
+
+A guard test protects an invariant, and several here first passed under the bug they were written to
+catch. `internal/mutation` checks that they now fail. Its table, `mutants` in
+`internal/mutation/mutants_test.go`, lists past mistakes as edits to production code. For each one the
+harness copies the module to a temporary directory, applies the edits, runs only the tests named in
+`Kills`. It fails if a named test passes or does not run, if an `Old` text is not found exactly once,
+if the mutant does not compile, or if an edit touches a `_test.go` file. `go test ./internal/...` runs it, and `-short`
+skips it with a message. It adds a few seconds, because each mutant builds `internal/server` once.
+
+When you add a guard test, add its mutant in the same commit:
+
+1. Write the test, and open the comment above it with the test's name followed by `pins`,
+   `guards` or `enforces`.
+2. Add a `mutant` that reintroduces the bug the test exists to catch. `Name` says what is wrong, `Origin`
+   names the commit that introduced the bug or added the test that kills it, `Edits` are `{File, Old,
+   New}` replacements (an empty `Old` adds a new file), and `Kills` lists the test.
+3. Run `go test -run TestGuardTestsKillTheirMutants ./internal/mutation`. Break the mutant on purpose
+   (change `New` to equal `Old`) and watch the test report `SURVIVED`, then restore it.
+
+`TestEveryGuardTestHasAMutant` fails for a test whose comment says it pins, guards or enforces
+something and that no mutant names, except the tests listed in `baseline_test.go`, which predate the
+harness. That list may only shrink: when you add a mutant for a listed test, delete its entry. The
+check trusts the comment's wording, so a guard test described some other way is not seen.
+
+The harness runs the mutant without `-race`, so a bug only the race detector reveals cannot be a mutant.
 
 ## In CI
 
