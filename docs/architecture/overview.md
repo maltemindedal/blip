@@ -31,7 +31,8 @@ See [Deploying to production](../guides/deploying-to-production.md).
 ```
 cmd/server/main.go          Entry point: logger, config, signal handling, Service.Run
 internal/server/
-  service.go                The service lifecycle: build, run, and drain in order
+  service.go                The service: what it builds, what serving means, what it drains
+  lifecycle.go              supervise: the one exit path, which runs every drain stage
   config.go                 Env parsing, defaults, and the resolved settings a hub runs under
   logging.go                Structured log/slog logger and LOG_LEVEL handling
   routes.go                 ServeMux wiring for /, /ws, /test
@@ -56,8 +57,8 @@ package comment on each file describes that file's slice of responsibility.
 
 **Service** (`service.go`) — the whole running server behind `New` and `Run`. `New(cfg)` builds the
 hub, the routes bound to it, and the `http.Server` that fronts them; `Serve(ctx, ln)` starts them on
-a listener and drains them when `ctx` is cancelled, and `Run(ctx)` opens that listener on the
-configured port and hands it to `Serve`. `Serve` is exported for a caller that needs the address
+a listener and drains them however serving ends, and `Run(ctx)` does the same on a listener it
+opens on the configured port. `Serve` is exported for a caller that needs the address
 before the service is built. Nothing else is
 exported from the lifecycle — the hub's own `start` and `shutdown` are unexported — so the shutdown
 ordering below cannot be got wrong by a caller, including a test, which is why the integration tests
@@ -222,17 +223,26 @@ its messages being queued indefinitely.
 
 **Startup** (`New`, then `Run`): `New` resolves the config and hands the settings to the hub,
 builds the mux, and constructs the `http.Server` with 15s read/write and 60s idle timeouts. `Run`
-opens a listener on the configured port first; if it cannot, it returns that error before starting
-anything. It then hands the listener to `Serve`, which starts the hub goroutine, calls
-`http.Server.Serve` in a goroutine, and blocks on either a listener error or the context being done.
-A listener error runs the same two-stage drain as cancellation before `Serve` returns it, so neither
-the hub nor a connection the server had already accepted outlives the call. Calling `Serve`
-directly is how the integration tests run a real service on an ephemeral port whose origin they
-know before the service is built.
+and `Serve` both go through one unexported `serve`, which starts the hub goroutine and then calls
+`supervise` with two things: a function that is the serving itself, and the ordered list of drain
+stages. For `Run` the serving function opens the listener on the configured port and then calls
+`http.Server.Serve`; for `Serve` the listener is the caller's. Calling `Serve` directly is how the
+integration tests run a real service on an ephemeral port whose origin they know before the service
+is built.
 
-**Shutdown**, on cancellation, in strict order with a 30-second overall cap. `Serve` builds one
-`context.Context` carrying that cap and derives a 15-second child for each stage, so a stage that
-overruns cannot borrow the other's budget:
+**One exit path** (`lifecycle.go`). `supervise` runs the serving function on a goroutine and waits
+for it to return or for the context to be done. Whichever happens, the same statements follow: every
+drain stage runs, in order, and `supervise` waits for the serving function before it returns. So a
+failure to listen, a listener that fails while serving, and a cancellation all drain the HTTP server
+and then the hub, and neither the hub nor a connection the server had already accepted outlives the
+call. `Service.serve` holds no `select` and no branch. A new exit cannot skip a stage, and a stage
+added to the list is drained on every exit. `TestSuperviseDrainsOnEveryExit` runs each way serving
+can end against the same assertions. Because failing to listen takes the same path, `Run` on a port
+it cannot bind logs the hub start and the drain lines before it returns the listen error.
+
+**Shutdown**, in strict order with a 30-second overall cap. `supervise` builds one
+`context.Context` carrying that cap and derives a child for each stage with an equal share of it,
+15 seconds each for two stages, so a stage that overruns cannot borrow the other's budget:
 
 1. `http.Server.Shutdown` (15s context) — stops accepting connections and drains in-flight requests.
    Upgraded WebSocket connections are hijacked, so this stage does not wait on them.
@@ -240,19 +250,21 @@ overruns cannot borrow the other's budget:
    every client connection, and waits on the `WaitGroup` for all pumps to exit. Both of those waits
    share the one 15-second deadline.
 
-The two errors are joined rather than short-circuited, so a hub that overran is still reported when
-the HTTP stage failed too. `Serve` then waits for the goroutine that called `http.Server.Serve` to
-return: when cancellation comes before that goroutine has started serving, `http.Server.Shutdown`
-has no listener to close, and the listener would otherwise be closed only after `Serve` had
-returned. If that goroutine reports that the listener had already failed on its own, `Serve` returns
-that failure rather than letting the cancellation hide it.
+The order is pinned by `TestServeStopsAcceptingBeforeItStopsTheHub`, which holds a request in
+flight across a cancellation and requires the hub to be running while the HTTP stage waits for it.
+The stage errors are joined rather than short-circuited, so a hub that overran is still reported
+when the HTTP stage failed too. On cancellation `supervise` then waits for the serving function to
+return: when cancellation comes before it has started serving, `http.Server.Shutdown` has no
+listener to close, and the listener would otherwise be closed only after `Serve` had returned. If
+the serving function reports that the listener had already failed on its own, that failure is
+returned rather than hidden by the cancellation.
 
 Every send to the run loop — in `register`, `unregister`, and `publish` — and the write pump's own
 event loop also select on the `quit` channel, so none of them can block shutdown by waiting on a run
 loop that has stopped reading. The other blocking waits are bounded in other ways: `ClientCount`
 selects on `done`, which closes when the run loop exits; each shutdown stage waits under its own
-deadline; `Serve`'s last receive from its serving goroutine completes once `http.Server.Shutdown`
-has run; and `writeFrame` receives only messages it has already counted as buffered.
+deadline; `supervise`'s last receive from its serving goroutine completes once
+`http.Server.Shutdown` has run; and `writeFrame` receives only messages it has already counted as buffered.
 
 ## Concurrency model
 
@@ -261,7 +273,7 @@ has run; and `writeFrame` receives only messages it has already counted as buffe
 | Hub run loop      | 1                | Process lifetime              | `Hub.start`                                |
 | Client read pump  | 1 per connection | Until read error or shutdown  | Hub run loop, via `serve`                  |
 | Client write pump | 1 per connection | Until send closed or shutdown | `wsClient.serve`                           |
-| HTTP serving      | 1                | Process lifetime              | `Service.Serve`, which `Service.Run` calls |
+| HTTP serving      | 1                | Process lifetime              | `supervise`, for `Run` and `Serve`         |
 
 Roughly two goroutines and a 256-message buffer per connection. Only the first of the two is the
 hub's to launch and to wait on; the second belongs to the client, which is why `serve` does not

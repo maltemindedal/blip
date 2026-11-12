@@ -122,19 +122,30 @@ var mutants = []mutant{
 		Name:   "a listener failure returns without draining",
 		Origin: "a363d8c introduced it; 0c8494d fixed it",
 		Edits: []edit{{
-			File: "internal/server/service.go",
-			Old:  "return errors.Join(fmt.Errorf(\"http server: %w\", err), s.shutdown())",
-			New:  "return fmt.Errorf(\"http server: %w\", err)",
+			File: "internal/server/lifecycle.go",
+			Old:  "\tcase serveErr = <-served:\n",
+			New:  "\tcase serveErr = <-served:\n\t\tif serveErr != nil {\n\t\t\treturn serveErr\n\t\t}\n",
 		}},
-		Kills: []string{"TestServeDrainsTheHubWhenTheListenerFails"},
+		Kills: []string{"TestServeDrainsTheHubWhenTheListenerFails", "TestSuperviseDrainsOnEveryExit"},
 	},
 	{
-		Name:   "a listener failure drains only the hub",
-		Origin: "0c8494d left it; d3a9bfe fixed it",
+		Name:   "Run returns the listen error itself, without draining",
+		Origin: "84f999c gave Run its own early return on a failed listen; with one exit path it would skip the drain",
 		Edits: []edit{{
 			File: "internal/server/service.go",
-			Old:  "return errors.Join(fmt.Errorf(\"http server: %w\", err), s.shutdown())",
-			New:  "return errors.Join(fmt.Errorf(\"http server: %w\", err), withStageDeadline(context.Background(), s.hub.shutdown))",
+			Old:  "\taddr := s.httpServer.Addr\n",
+			New: "\taddr := s.httpServer.Addr\n\tif probe, err := net.Listen(\"tcp\", addr); err != nil {\n" +
+				"\t\treturn fmt.Errorf(\"http server: %w\", err)\n\t} else {\n\t\t_ = probe.Close()\n\t}\n",
+		}},
+		Kills: []string{"TestRunDrainsTheServiceWhenItCannotListen"},
+	},
+	{
+		Name:   "the HTTP server is left out of the drain",
+		Origin: "0c8494d drained only the hub on a listener failure; d3a9bfe fixed it",
+		Edits: []edit{{
+			File: "internal/server/service.go",
+			Old:  "\t\ts.stopAccepting,\n",
+			New:  "",
 		}},
 		Kills: []string{"TestServeClosesOpenConnectionsWhenTheListenerFails"},
 	},
@@ -142,10 +153,40 @@ var mutants = []mutant{
 		Name:   "a listener failure that races cancellation is dropped",
 		Origin: "061ffa9 introduced it; f23bbde fixed it",
 		Edits: []edit{{
-			File: "internal/server/service.go",
-			Old:  "\t\tif serveErr != nil {\n",
-			New:  "\t\tif serveErr != nil && false {\n",
+			File: "internal/server/lifecycle.go",
+			Old:  "\t\tserveErr = <-served\n",
+			New:  "\t\t<-served\n",
 		}},
-		Kills: []string{"TestServeReportsAListenerFailureThatRacesCancellation"},
+		Kills: []string{"TestServeReportsAListenerFailureThatRacesCancellation", "TestSuperviseDrainsOnEveryExit"},
+	},
+	{
+		Name:   "supervise returns before the serving goroutine has finished",
+		Origin: "a363d8c carried it into Service.Run; 061ffa9 fixed it",
+		Edits: []edit{{
+			File: "internal/server/lifecycle.go",
+			Old:  "\t\tserveErr = <-served\n",
+			New:  "",
+		}},
+		Kills: []string{"TestSuperviseDrainsOnEveryExit"},
+	},
+	{
+		Name:   "every drain stage gets the whole budget",
+		Origin: "8d84659 gave each stage its own half; this test was added with supervise",
+		Edits: []edit{{
+			File: "internal/server/lifecycle.go",
+			Old:  "share := budget / time.Duration(len(stages))",
+			New:  "share := budget",
+		}},
+		Kills: []string{"TestSuperviseSplitsTheBudgetBetweenStages"},
+	},
+	{
+		Name:   "the hub is drained before the HTTP server",
+		Origin: "no commit; swapping the stages passed every unit test when the reshape was prototyped",
+		Edits: []edit{{
+			File: "internal/server/service.go",
+			Old:  "\t\ts.stopAccepting,\n\t\ts.hub.shutdown,\n",
+			New:  "\t\ts.hub.shutdown,\n\t\ts.stopAccepting,\n",
+		}},
+		Kills: []string{"TestServeStopsAcceptingBeforeItStopsTheHub"},
 	},
 }

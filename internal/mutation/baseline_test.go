@@ -20,7 +20,6 @@ var notYetMutated = map[string]bool{
 	"TestRateLimiterGrantsNothingWithoutElapsedTime": true,
 	"TestRateLimiterIgnoresBackwardsClock":           true,
 	"TestRateLimiterRestoresBurstAfterOneInterval":   true,
-	"TestRunStartsNothingWhenItCannotListen":         true,
 	"TestServeClosesItsListenerBeforeReturning":      true,
 	"TestWriteFrameCoalescesTheQueue":                true,
 	"TestWriteFrameDoesNotWaitOnAnEmptyQueue":        true,
