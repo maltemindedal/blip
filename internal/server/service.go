@@ -27,21 +27,22 @@ type Service struct {
 	httpServer *http.Server
 }
 
-// New assembles the service described by cfg without starting anything.
-//
-// cfg is handed to the hub, which resolves it and owns it from then on, so the
-// connection paths (origin checks, message size limits, rate limiting) read this
-// service's settings rather than the process's.
+// New assembles the service described by cfg without starting anything. The raw
+// Config goes no further than this call: everything past it reads the settings
+// cfg resolves to.
 func New(cfg *Config) *Service {
-	hub := newHub(cfg)
+	return newService(resolveConfig(cfg))
+}
+
+// newService is New past the configuration boundary: it has the settings and
+// no Config to read a raw value from by mistake.
+func newService(s settings) *Service {
+	hub := newHub(s)
 
 	return &Service{
 		hub: hub,
 		httpServer: &http.Server{
-			// The hub's resolved port, not the caller's: resolveConfig supplies
-			// the default and rewrites a bare port into ":port", which is the
-			// form http.Server.Addr requires.
-			Addr:              hub.cfg.Port,
+			Addr:              s.addr,
 			Handler:           setupRoutes(hub),
 			ReadTimeout:       15 * time.Second,
 			ReadHeaderTimeout: 5 * time.Second,

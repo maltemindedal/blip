@@ -32,7 +32,7 @@ See [Deploying to production](../guides/deploying-to-production.md).
 cmd/server/main.go          Entry point: logger, config, signal handling, Service.Run
 internal/server/
   service.go                The service lifecycle: build, run, and drain in order
-  config.go                 Env parsing, defaults, sanitization, the resolved config a hub owns
+  config.go                 Env parsing, defaults, and the resolved settings a hub runs under
   logging.go                Structured log/slog logger and LOG_LEVEL handling
   routes.go                 ServeMux wiring for /, /ws, /test
   handlers.go               Upgrade handler, health handler, embedded test page
@@ -68,8 +68,8 @@ drive the real thing rather than a copy of it. What the package exports is that 
 is unusable, so the only working one is the one `Service.Hub()` returns, and even that one's
 `ClientCount` blocks until `Run` or `Serve` has started its run loop.
 
-**Hub** (`hub.go`) — owns the set of connected clients and the configuration they run under.
-`newHub(cfg)` resolves the configuration once and keeps it, so the origin allow-list, the message
+**Hub** (`hub.go`) — owns the set of connected clients and the settings they run under.
+`newHub(s)` keeps the resolved settings it is given, so the origin allow-list, the message
 size limit, and the rate limit belong to that hub rather than to the process. `start()` launches a
 single goroutine — the hub's run loop — which selects over five channels: `registerReq`,
 `unregisterReq`, `broadcast`, `countReq`, and `quit`.
@@ -152,19 +152,26 @@ seam costs neither — `newRateLimiterAt` inlines into its wrapper, `allow` is o
 **Origin validation** (`origin.go`) — an `originPolicy`, built once when the hub is constructed:
 the allow-list normalized to lowercase `scheme://host` in a lookup set, and whether it contained `*`.
 Everything about origins lives in that one type — reading the configured list, `*`, dropping invalid
-entries, and the check itself — so its rules are unit-tested over plain strings. The hub's resolved
-configuration holds it, and its `checkOrigin` is bound as `CheckOrigin` into the upgrader that the
+entries, and the check itself — so its rules are unit-tested over plain strings. The policy is the
+only record of the allow-list: the hub's settings hold it and no second list beside it, so nothing
+can report an allow-list other than the one enforced. Its `checkOrigin` is bound as `CheckOrigin` into the upgrader that the
 hub's `/ws` handler builds, so rejection happens before any connection resources are allocated. The check normalizes the
 `Origin` header the same way, but headers that are already canonical — which is what browsers send
 — match the set directly and skip URL parsing entirely. A request with no `Origin` header is always
 rejected, even when the allow-list contains `*`.
 
 **Config** (`config.go`) — parsed from the environment at startup into a `Config`, then resolved once
-by `newHub`: defaults substituted for anything invalid, the allow-list normalized into a lookup set.
-The result is a value the hub owns and never mutates, so readers on the connection path need neither
-a lock nor an atomic load, and two hubs in one process can be configured differently. The caller's
-`Config` is copied on the way in, so changing it afterwards cannot change a running hub. Invalid
-values never abort startup; they log and fall back.
+by `New`, through `resolveConfig`, into `settings`: defaults substituted for anything invalid, the
+allow-list turned into an `originPolicy`. The raw `Config` stops there. `settings` is a separate type
+that does not embed it, and `New` passes only the settings on, so code past `New` cannot read a raw
+value where a resolved one is meant. `TestRawConfigStopsAtTheBoundary` parses the package and fails
+if production code outside `config.go` names `Config` anywhere but `New`'s parameter, or if `New`
+does anything with that parameter but resolve it. `TestEveryConfigFieldReachesTheSettings` fails for
+a `Config` field that `resolveConfig` does not read. The hub owns its settings and never mutates
+them, so readers on the connection path need neither a lock nor an atomic load, and two hubs in one
+process can be configured differently. Nothing in the settings aliases the caller's `Config`, so
+changing it afterwards cannot change a running hub. Invalid values never abort startup; they log and
+fall back.
 
 **Logging** (`logging.go`) — a single `log/slog` logger shared by the package, its level read from
 `LOG_LEVEL`. Per-message records are emitted at debug level behind a `debugEnabled()` check, so at
@@ -213,7 +220,7 @@ its messages being queued indefinitely.
 `main` supplies the logger, the config, and a context cancelled on `SIGINT`/`SIGTERM`, then calls
 `Run`. It holds no lifecycle logic of its own, so the ordering below is reachable from a test.
 
-**Startup** (`New`, then `Run`): `New` hands the config to the hub, which resolves and keeps it,
+**Startup** (`New`, then `Run`): `New` resolves the config and hands the settings to the hub,
 builds the mux, and constructs the `http.Server` with 15s read/write and 60s idle timeouts. `Run`
 opens a listener on the configured port first; if it cannot, it returns that error before starting
 anything. It then hands the listener to `Serve`, which starts the hub goroutine, calls

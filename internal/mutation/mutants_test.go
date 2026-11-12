@@ -42,22 +42,52 @@ var mutants = []mutant{
 		Kills: []string{"TestLogLevelFromEnv"},
 	},
 	{
-		Name:   "resolveConfig drops a field added to Config",
+		Name:   "resolveConfig ignores a field added to Config",
 		Origin: "69d8b2d added a test that passed this mutant; 4bc4afd fixed it",
+		Edits: []edit{{
+			File: "internal/server/config.go",
+			Old:  "\tRateLimit      RateLimitConfig\n}",
+			New:  "\tRateLimit      RateLimitConfig\n\tMutantField    int\n}",
+		}},
+		Kills: []string{"TestEveryConfigFieldReachesTheSettings"},
+	},
+	{
+		Name:   "resolveConfig drops a field Config already has",
+		Origin: "69d8b2d removed the field-by-field copy that could do this",
+		Edits: []edit{{
+			File: "internal/server/config.go",
+			Old:  "\t\tmaxMessageSize: raw.MaxMessageSize,\n",
+			New:  "",
+		}},
+		Kills: []string{"TestResolveConfigCarriesValidValuesAcross", "TestEveryConfigFieldReachesTheSettings"},
+	},
+	{
+		Name:   "New listens on the caller's raw port",
+		Origin: "ef3cfbb fixed it, and says the raw port reached the server before the branch that found it",
+		Edits: []edit{{
+			File: "internal/server/service.go",
+			Old:  "\treturn newService(resolveConfig(cfg))\n",
+			New: "\tsvc := newService(resolveConfig(cfg))\n\tif cfg != nil {\n" +
+				"\t\tsvc.httpServer.Addr = cfg.Port\n\t}\n\treturn svc\n",
+		}},
+		Kills: []string{"TestRawConfigStopsAtTheBoundary", "TestNewListensOnTheResolvedPort"},
+	},
+	{
+		Name:   "a raw Config is threaded past New",
+		Origin: "6fa491f embedded the raw Config in the resolved one; bd35c26 then left two allow-lists, which ae709e9 fixed",
 		Edits: []edit{
 			{
-				File: "internal/server/config.go",
-				Old:  "\tRateLimit      RateLimitConfig\n}",
-				New:  "\tRateLimit      RateLimitConfig\n\tMutantField    int\n}",
+				File: "internal/server/service.go",
+				Old:  "func newService(s settings) *Service {\n",
+				New:  "func newService(s settings, cfg *Config) *Service {\n\t_ = cfg\n",
 			},
 			{
-				File: "internal/server/config.go",
-				Old:  "\t\tresolved = *cfg\n",
-				New: "\t\tresolved = Config{Port: cfg.Port, AllowedOrigins: cfg.AllowedOrigins, " +
-					"MaxMessageSize: cfg.MaxMessageSize, RateLimit: cfg.RateLimit}\n",
+				File: "internal/server/service.go",
+				Old:  "\treturn newService(resolveConfig(cfg))\n",
+				New:  "\treturn newService(resolveConfig(cfg), cfg)\n",
 			},
 		},
-		Kills: []string{"TestResolveConfigPreservesEveryField"},
+		Kills: []string{"TestRawConfigStopsAtTheBoundary"},
 	},
 	{
 		Name:   "writeFrame re-reads the queue depth on every pass",

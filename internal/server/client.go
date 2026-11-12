@@ -29,7 +29,7 @@ type wsClient struct {
 	addr           string
 	maxMessageSize int64
 	rateLimiter    rateLimiter
-	rateLimit      RateLimitConfig
+	rateLimit      rateLimit
 	throttled      bool // read pump only: a throttling episode has been logged
 }
 
@@ -37,20 +37,20 @@ type wsClient struct {
 // hub reference, and client address. The client's send channel is buffered
 // to handle message queuing.
 //
-// cfg is the resolved configuration the connection runs under, which in
-// production is hub's own; the size limit and the rate limit both come from it,
-// so the two cannot be taken from different places. Nothing here touches conn
-// or hub, so a test can build a client without either and still get the
-// limiter and the limits the read pump would.
-func newClient(conn *websocket.Conn, hub *Hub, addr string, cfg *resolvedConfig) *wsClient {
+// s is the settings the connection runs under, which in production are hub's
+// own; the size limit and the rate limit both come from it, so the two cannot
+// be taken from different places. Nothing here touches conn or hub, so a test
+// can build a client without either and still get the limiter and the limits
+// the read pump would.
+func newClient(conn *websocket.Conn, hub *Hub, addr string, s *settings) *wsClient {
 	return &wsClient{
 		conn:           conn,
 		send:           make(chan []byte, sendBufferSz),
 		hub:            hub,
 		addr:           addr,
-		maxMessageSize: cfg.MaxMessageSize,
-		rateLimiter:    newRateLimiter(cfg.RateLimit.Burst, cfg.RateLimit.RefillInterval),
-		rateLimit:      cfg.RateLimit,
+		maxMessageSize: s.maxMessageSize,
+		rateLimiter:    newRateLimiter(s.rateLimit.burst, s.rateLimit.refill),
+		rateLimit:      s.rateLimit,
 	}
 }
 
@@ -135,8 +135,8 @@ func (c *wsClient) checkRateLimit() bool {
 
 	log().Warn("rate limit exceeded; discarding message",
 		"addr", c.addr,
-		"burst", c.rateLimit.Burst,
-		"interval", c.rateLimit.RefillInterval)
+		"burst", c.rateLimit.burst,
+		"interval", c.rateLimit.refill)
 	return false
 }
 

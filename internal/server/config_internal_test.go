@@ -2,8 +2,12 @@ package server
 
 import (
 	"bytes"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"log/slog"
 	"math"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strconv"
@@ -12,72 +16,197 @@ import (
 	"time"
 )
 
-// TestResolveConfigPreservesEveryField pins that resolution is lossless for a
-// Config that needs nothing substituted.
+// TestResolveConfigCarriesValidValuesAcross pins that resolution changes
+// nothing in a Config that needs nothing substituted.
 //
-// Two halves, because the comparison alone is not enough. assertEveryFieldIsSet
-// fails if the literal below leaves any field of [Config] at its zero value, so
-// a field added to the struct stops this test until someone gives it a value
-// here. Only then does the [reflect.DeepEqual] comparison mean anything: with
-// every field set to something non-zero, a field [resolveConfig] drops comes
-// back zero and the comparison catches it. Without the first half the second is
-// vacuous — an unset field is zero on both sides and compares equal, which is
-// the same enumerate-every-field trap this test exists to guard against, merely
-// moved from resolveConfig into the test.
-//
-// Neither half catches aliasing. DeepEqual compares what a reference field
-// points at, not whether both sides point at the same thing, so a field that
-// arrives sharing the caller's backing array rather than copied passes here.
-// That hazard is guarded by the comment in resolveConfig.
-func TestResolveConfigPreservesEveryField(t *testing.T) {
+// It does not cover a field added to Config later, which
+// TestEveryConfigFieldReachesTheSettings does, or the substituted defaults.
+func TestResolveConfigCarriesValidValuesAcross(t *testing.T) {
 	t.Parallel()
 
-	// Every value is non-default and already normalized, so nothing in the
-	// result can differ because it was resolved rather than dropped.
-	cfg := Config{
+	got := resolveConfig(&Config{
 		Port:           ":9443",
 		AllowedOrigins: []string{"https://example.com"},
 		MaxMessageSize: 4096,
-		RateLimit: RateLimitConfig{
-			Burst:          42,
-			RefillInterval: 3 * time.Second,
-		},
+		RateLimit:      RateLimitConfig{Burst: 42, RefillInterval: 3 * time.Second},
+	})
+
+	want := settings{
+		addr:           ":9443",
+		origins:        originPolicy{origins: map[string]struct{}{"https://example.com": {}}},
+		maxMessageSize: 4096,
+		rateLimit:      rateLimit{burst: 42, refill: 3 * time.Second},
 	}
 
-	assertEveryFieldIsSet(t, reflect.ValueOf(cfg), "Config")
-
-	resolved := resolveConfig(&cfg)
-
-	if !reflect.DeepEqual(resolved.Config, cfg) {
-		t.Errorf("resolveConfig(%+v) resolved to %+v, want the input carried across unchanged",
-			cfg, resolved.Config)
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("resolveConfig resolved to %+v, want %+v", got, want)
 	}
 }
 
-// assertEveryFieldIsSet fails for each field of v left at its zero value. It
-// recurses into nested structs declared in this package — RateLimitConfig
-// today — so a field added one level down is caught too, and stops at types
-// from elsewhere rather than picking over their internals.
-func assertEveryFieldIsSet(t *testing.T, v reflect.Value, path string) {
-	t.Helper()
+// TestEveryConfigFieldReachesTheSettings pins that no field of [Config] is
+// dead: changing any one of them, however deeply nested, changes the settings
+// [resolveConfig] returns. It walks the struct by reflection instead of naming
+// fields, so a field added to Config and not read by resolveConfig fails here
+// without anyone remembering to list it. Because settings is the only thing
+// production code past [New] can read, a field that reaches the settings is
+// a field that can take effect, and one that does not cannot.
+//
+// It does not check that the value arrives unchanged, which
+// TestResolveConfigCarriesValidValuesAcross does for today's fields, nor that
+// anything reads the settings field it lands in.
+func TestEveryConfigFieldReachesTheSettings(t *testing.T) {
+	t.Parallel()
 
-	structType := v.Type()
+	baseline := resolveConfig(NewConfig())
 
-	for i := range structType.NumField() {
-		field := structType.Field(i)
-		value := v.Field(i)
-		name := path + "." + field.Name
+	for _, path := range leafFields(reflect.TypeFor[Config](), nil) {
+		cfg := NewConfig()
+		field := reflect.ValueOf(cfg).Elem().FieldByIndex(path.index)
 
-		if value.Kind() == reflect.Struct && field.Type.PkgPath() == structType.PkgPath() {
-			assertEveryFieldIsSet(t, value, name)
+		switch field.Kind() {
+		case reflect.String:
+			field.SetString("9443")
+		case reflect.Int, reflect.Int64:
+			field.SetInt(field.Int() + 7)
+		case reflect.Slice:
+			field.Set(reflect.ValueOf([]string{"https://changed.example"}))
+		default:
+			t.Fatalf("Config.%s has kind %s, which this test cannot change; teach it how", path.name, field.Kind())
+		}
+
+		if reflect.DeepEqual(resolveConfig(cfg), baseline) {
+			t.Errorf("changing Config.%s changed nothing in the resolved settings: "+
+				"resolveConfig does not read it, so it can have no effect", path.name)
+		}
+	}
+}
+
+type fieldPath struct {
+	name  string
+	index []int
+}
+
+// leafFields lists every non-struct field of t, descending into nested structs.
+func leafFields(t reflect.Type, prefix []int) []fieldPath {
+	var out []fieldPath
+
+	for i := range t.NumField() {
+		field := t.Field(i)
+		index := append(slices.Clone(prefix), i)
+
+		if field.Type.Kind() == reflect.Struct {
+			for _, leaf := range leafFields(field.Type, index) {
+				out = append(out, fieldPath{field.Name + "." + leaf.name, leaf.index})
+			}
 			continue
 		}
 
-		if value.IsZero() {
-			t.Errorf("%s is left at its zero value by this test; give it a non-zero value so "+
-				"the comparison can tell a field resolveConfig dropped from one never set", name)
-		}
+		out = append(out, fieldPath{field.Name, index})
 	}
+
+	return out
+}
+
+// TestRawConfigStopsAtTheBoundary pins the rule that keeps raw and resolved
+// values apart: outside config.go, production code names [Config] in one place,
+// the parameter list of [New], and New does one thing with that parameter,
+// which is to hand it to [resolveConfig]. Anything else that held a Config (a
+// struct field, a second parameter, a read of cfg.Port in New) could use a raw
+// value where a resolved one is meant.
+//
+// It parses this package's sources and matches identifiers by name. It does not
+// catch a raw value that config.go itself hands out as a plain string or int.
+func TestRawConfigStopsAtTheBoundary(t *testing.T) {
+	t.Parallel()
+
+	sources, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatalf("Failed to list package sources: %v", err)
+	}
+
+	fset := token.NewFileSet()
+	foundNew := false
+
+	for _, path := range sources {
+		if strings.HasSuffix(path, "_test.go") || path == "config.go" {
+			continue
+		}
+
+		file, err := parser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			t.Fatalf("Failed to parse %s: %v", path, err)
+		}
+
+		inNewParams := map[*ast.Ident]bool{}
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Recv != nil || fn.Name.Name != "New" {
+				continue
+			}
+			foundNew = true
+
+			ast.Inspect(fn.Type.Params, func(n ast.Node) bool {
+				if id, ok := n.(*ast.Ident); ok {
+					inNewParams[id] = true
+				}
+				return true
+			})
+			checkNewOnlyResolves(t, fset, fn)
+		}
+
+		ast.Inspect(file, func(n ast.Node) bool {
+			id, ok := n.(*ast.Ident)
+			if !ok || inNewParams[id] || (id.Name != "Config" && id.Name != "RateLimitConfig") {
+				return true
+			}
+
+			t.Errorf("%s names %s. Past New, production code reads the resolved settings: "+
+				"take a settings (or one field of it) instead, and add what you need to settings in config.go",
+				fset.Position(id.Pos()), id.Name)
+			return true
+		})
+	}
+
+	// Without New the check above would pass on a package that had moved the
+	// boundary somewhere this test does not look.
+	if !foundNew {
+		t.Fatal("found no func New outside config.go; the configuration boundary is unguarded")
+	}
+}
+
+// checkNewOnlyResolves fails unless every use of New's parameter is as the
+// argument of a resolveConfig call.
+func checkNewOnlyResolves(t *testing.T, fset *token.FileSet, fn *ast.FuncDecl) {
+	t.Helper()
+
+	if len(fn.Type.Params.List) != 1 || len(fn.Type.Params.List[0].Names) != 1 {
+		t.Errorf("%s: New takes something other than one named Config parameter", fset.Position(fn.Pos()))
+		return
+	}
+	param := fn.Type.Params.List[0].Names[0].Name
+
+	resolved := map[*ast.Ident]bool{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok || len(call.Args) != 1 {
+			return true
+		}
+		callee, isIdent := call.Fun.(*ast.Ident)
+		arg, isArg := call.Args[0].(*ast.Ident)
+		if isIdent && isArg && callee.Name == "resolveConfig" {
+			resolved[arg] = true
+		}
+		return true
+	})
+
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		if id, ok := n.(*ast.Ident); ok && id.Name == param && !resolved[id] {
+			t.Errorf("%s: New uses its raw Config for something other than resolveConfig(%s). "+
+				"Read the value from the settings resolveConfig returns instead.",
+				fset.Position(id.Pos()), param)
+		}
+		return true
+	})
 }
 
 // TestNewConfigFromEnvRateLimit pins how the rate limit variables are read: in
@@ -200,7 +329,7 @@ func TestNewConfigFromEnvPort(t *testing.T) {
 // TestNewConfigFromEnvAllowedOrigins pins that ALLOWED_ORIGINS is split on
 // commas with each entry trimmed, and that an unset one keeps the default list.
 // It checks the raw list on Config; which entries the origin policy then accepts
-// is TestResolveConfigRecordsTheEffectiveAllowList's job.
+// is TestOriginPolicyAllows's job.
 //
 // t.Setenv rules out t.Parallel.
 func TestNewConfigFromEnvAllowedOrigins(t *testing.T) {
@@ -296,41 +425,5 @@ func TestNewConfig(t *testing.T) {
 	expectedPort := ":8080"
 	if config.Port != expectedPort {
 		t.Errorf("Expected default port %s, got %s", expectedPort, config.Port)
-	}
-}
-
-// TestResolveConfigRecordsTheEffectiveAllowList pins that the resolved
-// configuration's AllowedOrigins is the allow-list the hub enforces: entries
-// trimmed and lowercased, blank entries and entries without a scheme dropped,
-// and "*" kept as itself, so a list that allows everything does not read as one
-// that allows nothing. Nothing in production reads the field today; this keeps a
-// future reader, such as a startup log of the allow-list, from reporting
-// something other than what the policy does.
-//
-// It does not check the policy's decisions; TestOriginPolicyAllows does.
-func TestResolveConfigRecordsTheEffectiveAllowList(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name       string
-		configured []string
-		want       []string
-	}{
-		{
-			"entries normalized and invalid ones dropped",
-			[]string{"  HTTPS://Chat.Example.com  ", "*", "example.com", ""},
-			[]string{"https://chat.example.com", "*"},
-		},
-		{"star alone", []string{" * "}, []string{"*"}},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			resolved := resolveConfig(&Config{AllowedOrigins: tt.configured})
-
-			if !slices.Equal(resolved.AllowedOrigins, tt.want) {
-				t.Errorf("resolved AllowedOrigins = %q, want %q", resolved.AllowedOrigins, tt.want)
-			}
-		})
 	}
 }

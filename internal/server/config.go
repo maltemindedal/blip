@@ -5,7 +5,6 @@ package server
 import (
 	"math"
 	"os"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -38,14 +37,24 @@ type Config struct {
 	RateLimit      RateLimitConfig
 }
 
-// resolvedConfig is an immutable, fully resolved view of the configuration:
-// defaults substituted and the origin allow-list turned into an [originPolicy].
-// A [Hub] owns one, built once at construction, so the hot paths (origin checks,
-// client construction) read it without locking and two hubs in one process can
-// be configured differently.
-type resolvedConfig struct {
-	Config
-	origins originPolicy
+// settings is what a running hub and its connections obey: every value already
+// defaulted and validated, and the origin allow-list held only as the
+// [originPolicy] that enforces it. [resolveConfig] is the one place that builds
+// one. It does not embed [Config], so a raw value cannot be read where a
+// resolved one is meant: past [New], the raw Config is gone
+// (TestRawConfigStopsAtTheBoundary).
+type settings struct {
+	// addr is the listen address in the host:port form [net.Listen] takes.
+	addr           string
+	origins        originPolicy
+	maxMessageSize int64
+	rateLimit      rateLimit
+}
+
+// rateLimit is a resolved [RateLimitConfig]: both values are positive.
+type rateLimit struct {
+	burst  int
+	refill time.Duration
 }
 
 func defaultConfig() Config {
@@ -60,50 +69,46 @@ func defaultConfig() Config {
 	}
 }
 
-// resolveConfig substitutes defaults for invalid values and resolves the origin
-// allow-list into an [originPolicy]. A nil cfg resolves to the defaults.
+// resolveConfig turns the caller's Config into the settings a hub runs under,
+// substituting the default for every value that is unset or invalid. A nil cfg
+// resolves to the defaults. Nothing in the result aliases cfg.
 //
-// The caller's Config is copied, so mutating it afterwards cannot change a hub
-// that has already been built from it. The result is never mutated again.
-func resolveConfig(cfg *Config) resolvedConfig {
-	resolved := defaultConfig()
+// A field added to Config has to be read here to have any effect, because no
+// other production code can name Config; TestEveryConfigFieldReachesTheSettings
+// fails for a field this function ignores.
+func resolveConfig(cfg *Config) settings {
+	raw := defaultConfig()
 	if cfg != nil {
-		// Whole-struct assignment, not a field-by-field literal: a field added to
-		// Config is carried across by default rather than silently dropped by a
-		// literal that forgot to list it.
-		//
-		// It is a shallow copy, so it only makes that promise for value-typed
-		// fields. A reference-typed field added to Config would arrive aliased to
-		// the caller's, which breaks the guarantee above and which neither the
-		// compiler nor TestResolveConfigPreservesEveryField can see. Give any such
-		// field its own copy here, as AllowedOrigins gets below.
-		resolved = *cfg
-		resolved.AllowedOrigins = slices.Clone(cfg.AllowedOrigins)
+		raw = *cfg
+	}
+
+	s := settings{
+		addr:           raw.Port,
+		origins:        newOriginPolicy(raw.AllowedOrigins),
+		maxMessageSize: raw.MaxMessageSize,
+		rateLimit:      rateLimit{burst: raw.RateLimit.Burst, refill: raw.RateLimit.RefillInterval},
 	}
 
 	switch {
-	case resolved.Port == "":
-		resolved.Port = defaultPort
-	case !strings.Contains(resolved.Port, ":"):
-		resolved.Port = ":" + resolved.Port
+	case s.addr == "":
+		s.addr = defaultPort
+	case !strings.Contains(s.addr, ":"):
+		s.addr = ":" + s.addr
 	}
 
-	if resolved.MaxMessageSize <= 0 {
-		resolved.MaxMessageSize = defaultMaxMessageSize
+	if s.maxMessageSize <= 0 {
+		s.maxMessageSize = defaultMaxMessageSize
 	}
 
-	if resolved.RateLimit.Burst <= 0 {
-		resolved.RateLimit.Burst = defaultRateLimitBurst
+	if s.rateLimit.burst <= 0 {
+		s.rateLimit.burst = defaultRateLimitBurst
 	}
 
-	if resolved.RateLimit.RefillInterval <= 0 {
-		resolved.RateLimit.RefillInterval = defaultRateLimitRefill
+	if s.rateLimit.refill <= 0 {
+		s.rateLimit.refill = defaultRateLimitRefill
 	}
 
-	origins, allowed := newOriginPolicy(resolved.AllowedOrigins)
-	resolved.AllowedOrigins = allowed
-
-	return resolvedConfig{Config: resolved, origins: origins}
+	return s
 }
 
 // NewConfig creates a Config instance populated with default values for all settings.

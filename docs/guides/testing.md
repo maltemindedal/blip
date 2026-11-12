@@ -40,11 +40,13 @@ fixed port, driven the way `main` drives it. They see `internal/server` through 
 only, which is what keeps them testing the service rather than a copy of it.
 
 Checks on the package's own shape, rather than on behaviour anyone outside can call, are unit tests
-too. `TestResolveConfigPreservesEveryField` compares a resolved `Config` field for field
-so a field added to the struct cannot be dropped in resolution unnoticed, and
+too. `TestEveryConfigFieldReachesTheSettings` changes each `Config` field in turn and requires the
+resolved settings to change, so a field added to the struct cannot be ignored in resolution
+unnoticed; `TestRawConfigStopsAtTheBoundary` parses the package's non-test sources to keep the raw
+`Config` from being named past `New`; and
 `rate_limiter_internal_test.go` holds `TestClockSeamIsTestOnly`, which parses the package's non-test
-sources to keep production off the rate limiter's clock seam. Neither is reachable from outside the
-package by construction — one names an unexported type, the other reads the package's own files.
+sources to keep production off the rate limiter's clock seam. None is reachable from outside the
+package by construction: the first names an unexported type, the others read the package's own files.
 
 That view is also what makes the hub's delivery rules testable at all. `hub_internal_test.go` defines
 a `fakeClient` — an inbox and an address, no socket underneath — and registers it through the real

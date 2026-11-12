@@ -9,7 +9,7 @@ and no configuration file.
 An annotated template lives in [`.env.example`](../../.env.example). The process does not read
 `.env` itself — use your shell, `docker compose`, or a systemd unit to load it.
 
-The parsed `Config` is resolved once, when the hub is built: defaults are substituted for anything
+The parsed `Config` is resolved once, when the service is built: defaults are substituted for anything
 invalid and the allow-list is normalized into a lookup set. That resolved value belongs to the hub,
 so every connection it accepts runs under the settings it was given — nothing is process-wide, and
 nothing can be changed while the server is running.

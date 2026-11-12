@@ -25,16 +25,11 @@ type originPolicy struct {
 // "*" allows every origin, and anything that does not parse as an origin is
 // logged and ignored rather than aborting startup.
 //
-// It also returns the entries it kept, normalized and in their configured
-// order, with "*" kept as itself: the allow-list as enforced, for the resolved
-// configuration to record. That list is nil when nothing was configured.
-func newOriginPolicy(configured []string) (originPolicy, []string) {
+// The policy is the only record of the allow-list a hub keeps. Anything that
+// wants to show the list derives it from the policy, so it cannot disagree with
+// what is enforced.
+func newOriginPolicy(configured []string) originPolicy {
 	policy := originPolicy{origins: make(map[string]struct{}, len(configured))}
-
-	var kept []string
-	if len(configured) > 0 {
-		kept = make([]string, 0, len(configured))
-	}
 
 	for _, origin := range configured {
 		trimmed := strings.TrimSpace(origin)
@@ -44,7 +39,6 @@ func newOriginPolicy(configured []string) (originPolicy, []string) {
 
 		if trimmed == "*" {
 			policy.allowAll = true
-			kept = append(kept, trimmed)
 			continue
 		}
 
@@ -55,10 +49,9 @@ func newOriginPolicy(configured []string) (originPolicy, []string) {
 		}
 
 		policy.origins[normalized] = struct{}{}
-		kept = append(kept, normalized)
 	}
 
-	return policy, kept
+	return policy
 }
 
 func normalizeOrigin(origin string) (string, bool) {

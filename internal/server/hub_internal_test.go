@@ -69,7 +69,7 @@ const hubShutdownBudget = 5 * time.Second
 func startTestHub(t *testing.T, cfg *Config) *Hub {
 	t.Helper()
 
-	h := newHub(cfg)
+	h := newHub(resolveConfig(cfg))
 	h.start()
 
 	// ClientCount is answered by the run loop, so a reply proves it is up and has
@@ -126,7 +126,7 @@ func registerFake(t *testing.T, h *Hub, addr string, buffer int) *fakeClient {
 func newBenchHub(tb testing.TB, n int) (*Hub, []*fakeClient) {
 	tb.Helper()
 
-	h := newHub(nil)
+	h := newHub(resolveConfig(nil))
 	clients := make([]*fakeClient, n)
 
 	for i := range clients {
@@ -432,7 +432,7 @@ func TestHubShutdownStopsTheEventLoop(t *testing.T) {
 func TestHubShutdownBeforeStartIsNoOp(t *testing.T) {
 	t.Parallel()
 
-	hub := newHub(nil)
+	hub := newHub(resolveConfig(nil))
 
 	if err := shutdownHub(t, hub); err != nil {
 		t.Errorf("Expected shutdown of an unstarted hub to succeed, got: %v", err)
@@ -450,7 +450,7 @@ func TestHubShutdownRightAfterStartStopsTheHub(t *testing.T) {
 	const rounds = 200
 
 	for range rounds {
-		hub := newHub(nil)
+		hub := newHub(resolveConfig(nil))
 		shutdownAtCleanup(t, hub)
 		hub.start()
 
@@ -470,7 +470,7 @@ func TestHubShutdownRightAfterStartStopsTheHub(t *testing.T) {
 func TestHubStartTwiceRunsOneLoop(t *testing.T) {
 	t.Parallel()
 
-	hub := newHub(nil)
+	hub := newHub(resolveConfig(nil))
 	shutdownAtCleanup(t, hub)
 
 	var wg sync.WaitGroup

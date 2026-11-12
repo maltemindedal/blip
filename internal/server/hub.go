@@ -48,11 +48,11 @@ type clientConn interface {
 // mutation of clients must be reached through the hub's register, unregister
 // and publish methods, which hand the work to that goroutine over a channel.
 type Hub struct {
-	// cfg is the resolved configuration every connection of this hub runs
-	// under: its origin allow-list, its message size limit, and its rate
-	// limit. It is set once by [newHub] and never mutated, so the connection
-	// paths read it without synchronization.
-	cfg resolvedConfig
+	// settings is what every connection of this hub runs under: its origin
+	// allow-list, its message size limit, and its rate limit. It is set once by
+	// [newHub] and never mutated, so the connection paths read it without
+	// synchronization.
+	settings settings
 
 	// clients maps every registered client to the inbox it was registered with.
 	// Keeping the channel here rather than asking the client for it per message
@@ -80,13 +80,11 @@ type Hub struct {
 // newHub creates and initializes a new Hub instance with all necessary channels
 // and client map. The returned Hub is ready to manage WebSocket connections.
 //
-// cfg is resolved once, here, and belongs to the hub from then on: the origin
-// check, the message size limit, and the rate limit every connection of this hub
-// runs under all come from it. A nil cfg means the defaults, which is what a
-// caller that does not care about any of them passes.
-func newHub(cfg *Config) *Hub {
+// s belongs to the hub from then on: the origin check, the message size limit,
+// and the rate limit every connection of this hub runs under all come from it.
+func newHub(s settings) *Hub {
 	return &Hub{
-		cfg:           resolveConfig(cfg),
+		settings:      s,
 		clients:       make(map[clientConn]chan<- []byte),
 		broadcast:     make(chan broadcastMessage),
 		registerReq:   make(chan clientConn),
