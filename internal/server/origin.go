@@ -24,10 +24,6 @@ type originPolicy struct {
 // trimmed and normalized to lowercase scheme://host; blank entries are skipped,
 // "*" allows every origin, and anything that does not parse as an origin is
 // logged and ignored rather than aborting startup.
-//
-// The policy is the only record of the allow-list a hub keeps. Anything that
-// wants to show the list derives it from the policy, so it cannot disagree with
-// what is enforced.
 func newOriginPolicy(configured []string) originPolicy {
 	policy := originPolicy{origins: make(map[string]struct{}, len(configured))}
 

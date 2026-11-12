@@ -86,7 +86,6 @@ type fieldPath struct {
 	index []int
 }
 
-// leafFields lists every non-struct field of t, descending into nested structs.
 func leafFields(t reflect.Type, prefix []int) []fieldPath {
 	var out []fieldPath
 
@@ -167,15 +166,11 @@ func TestRawConfigStopsAtTheBoundary(t *testing.T) {
 		})
 	}
 
-	// Without New the check above would pass on a package that had moved the
-	// boundary somewhere this test does not look.
 	if !foundNew {
 		t.Fatal("found no func New outside config.go; the configuration boundary is unguarded")
 	}
 }
 
-// checkNewOnlyResolves fails unless every use of New's parameter is as the
-// argument of a resolveConfig call.
 func checkNewOnlyResolves(t *testing.T, fset *token.FileSet, fn *ast.FuncDecl) {
 	t.Helper()
 

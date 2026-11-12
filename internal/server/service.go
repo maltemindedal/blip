@@ -12,8 +12,6 @@ import (
 	"time"
 )
 
-// shutdownTimeout is the budget for the whole drain. [supervise] splits it
-// evenly between the stages [Service.serve] lists.
 const shutdownTimeout = 30 * time.Second
 
 // Service is the running server: one hub, the routes bound to it, and the HTTP
@@ -26,8 +24,7 @@ type Service struct {
 }
 
 // New resolves cfg, starts the hub that will run under it, and builds the HTTP
-// server in front of that hub. The raw Config goes no further than this call:
-// everything past it reads the settings cfg resolves to.
+// server in front of that hub.
 //
 // The hub is running when New returns, and [Service.Run] or [Service.Serve] is
 // what stops it, on every way out. A Service that is built and never run leaves
@@ -36,8 +33,6 @@ func New(cfg *Config) *Service {
 	return newService(resolveConfig(cfg))
 }
 
-// newService is New past the configuration boundary: it has the settings and
-// no Config to read a raw value from by mistake.
 func newService(s settings) *Service {
 	hub := startHub(s)
 	log().Info("hub started and ready to manage WebSocket connections")
@@ -69,16 +64,11 @@ func (s *Service) Hub() *Hub {
 func (s *Service) Run(ctx context.Context) error {
 	addr := s.httpServer.Addr
 
-	// The configured address is the one logged, not the listener's resolved
-	// form, so the startup line reads as it is configured: addr=:8080 rather
-	// than [::]:8080.
 	return s.serve(ctx, addr, func() (net.Listener, error) { return net.Listen("tcp", addr) })
 }
 
 // Serve serves HTTP on ln, which it closes before returning, until ln fails or
-// ctx is done. It exists for a caller that needs the address before the service
-// is built, such as a test listening on an ephemeral port whose own origin has
-// to be on the allow-list.
+// ctx is done.
 //
 // However serving ends, the HTTP server and then the hub are drained, so
 // nothing outlives the call. A listener failure is returned wrapped, joined
@@ -89,13 +79,6 @@ func (s *Service) Serve(ctx context.Context, ln net.Listener) error {
 	return s.serve(ctx, ln.Addr().String(), func() (net.Listener, error) { return ln, nil })
 }
 
-// serve is the lifecycle behind [Service.Run] and [Service.Serve]: what serving
-// means, and what was started and so has to be drained, in order. It chooses no
-// exit path, because [supervise] owns every way out. addr is only logged.
-//
-// The HTTP server must stop accepting connections before the hub drains.
-// Anything else this service starts goes in this list, where it is drained on
-// every path.
 func (s *Service) serve(ctx context.Context, addr string, listen func() (net.Listener, error)) error {
 	return supervise(ctx,
 		func() error {

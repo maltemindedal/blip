@@ -28,9 +28,7 @@ func TestSuperviseDrainsOnEveryExit(t *testing.T) {
 	errSecond := errors.New("second stage failed")
 
 	tests := []struct {
-		name string
-		// serve is what the serving function does once stop tells it the
-		// drain has reached it; cancel is the supervising context's.
+		name      string
 		serve     func(cancel context.CancelFunc, stop <-chan struct{}) error
 		stageErrs [2]error
 		want      []error

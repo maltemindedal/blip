@@ -1,6 +1,3 @@
-// Package mutation checks that the module's guard tests guard something. It
-// replays past bugs as mutants and fails when the test meant to catch one
-// passes. It contains only tests, so `go test ./internal/...` runs it.
 package mutation
 
 import (
@@ -19,24 +16,19 @@ import (
 	"time"
 )
 
-// edit replaces Old with New in File, a path relative to the module root. An
-// empty Old adds File as a new file with the content New.
 type edit struct {
 	File string
 	Old  string
 	New  string
 }
 
-// mutant is one past mistake replayed against the current code.
 type mutant struct {
 	Name   string
-	Origin string   // the commit that introduced the bug or added the test that catches it
-	Edits  []edit   // applied in order to a copy of the module
-	Kills  []string // top-level tests that must fail under the mutant
+	Origin string
+	Edits  []edit
+	Kills  []string
 }
 
-// moduleRoot finds the directory holding go.mod by walking up from the test's
-// working directory, which `go test` sets to the package directory.
 func moduleRoot(t *testing.T) string {
 	t.Helper()
 	dir, err := os.Getwd()
@@ -55,7 +47,6 @@ func moduleRoot(t *testing.T) string {
 	}
 }
 
-// apply returns the content of every file the mutant touches, keyed by path.
 func apply(root string, m mutant) (map[string]string, error) {
 	files := map[string]string{}
 	for _, e := range m.Edits {
@@ -85,8 +76,6 @@ func apply(root string, m mutant) (map[string]string, error) {
 	return files, nil
 }
 
-// copyModule copies the parts of the module a unit test needs into dst. It
-// skips this package, which would otherwise run inside its own copy.
 func copyModule(root, dst string) error {
 	for _, top := range []string{"go.mod", "go.sum", "cmd", "internal"} {
 		err := filepath.WalkDir(filepath.Join(root, top), func(p string, d fs.DirEntry, err error) error {
@@ -118,8 +107,6 @@ func copyModule(root, dst string) error {
 	return nil
 }
 
-// slots bounds how many mutant builds run at once, so this package does not
-// starve the packages `go test` runs beside it.
 var slots = make(chan struct{}, max(1, runtime.GOMAXPROCS(0)/2))
 
 type testEvent struct {
@@ -128,15 +115,9 @@ type testEvent struct {
 	Output string
 }
 
-// runMutant runs only the mutant's Kills in a copy of the module that carries
-// the edits, and returns the outcome of each top-level test by name along with
-// the raw output.
-//
 // It reads the copy from disk, not through `go test -overlay`: a guard such as
 // TestClockSeamIsTestOnly parses the package's source files, and an overlay
-// never shows it the mutant. The child inherits the environment, so GOFLAGS and
-// the build cache apply, but not the outer run's flags. It runs without -race,
-// so a mutant that only the race detector kills cannot be expressed here.
+// never shows it the mutant.
 func runMutant(t *testing.T, root string, m mutant, files map[string]string) (map[string]string, string, bool) {
 	t.Helper()
 	dst := t.TempDir()

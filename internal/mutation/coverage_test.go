@@ -9,7 +9,6 @@ import (
 	"testing"
 )
 
-// guardComment is how this repo's test comments announce a guard.
 var guardComment = regexp.MustCompile(`^Test\w+ (pins|guards|enforces)\b`)
 
 // TestEveryGuardTestHasAMutant fails when a test whose comment says it pins,

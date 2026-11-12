@@ -89,8 +89,6 @@ func TestMakefileDryRunsEveryDocumentedTarget(t *testing.T) {
 	}
 }
 
-// lastLine returns the final line of make's output, where it reports the error;
-// the lines before it are the recipes a dry run printed.
 func lastLine(out []byte) string {
 	s := strings.TrimSpace(string(out))
 	return s[strings.LastIndex(s, "\n")+1:]

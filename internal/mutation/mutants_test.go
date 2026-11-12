@@ -1,15 +1,5 @@
 package mutation
 
-// mutants is the list of bugs the guard tests in this module must catch. Each
-// one is a past mistake, replayed against today's code: the harness applies its
-// edits to a copy of the module and runs the tests in Kills, each of which must
-// fail. Name the commit that introduced the bug, or the one that added the test
-// when the bug was found by hand.
-//
-// An edit whose Old text no longer appears exactly once fails the harness, so a
-// refactor that moves the guarded code has to move its mutant too. To add a
-// mutant for a new guard test, see "Guard tests and mutants" in
-// docs/guides/testing.md.
 var mutants = []mutant{
 	{
 		Name:   "SERVER_PORT is read but never applied",

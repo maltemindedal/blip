@@ -6,8 +6,6 @@ import (
 	"testing"
 )
 
-// versionedFiles are the non-Go files, besides markdown, that state a tool or
-// toolchain version.
 var versionedFiles = []string{"Makefile", "Dockerfile", ".github/workflows/ci.yml"}
 
 func textFiles(t *testing.T, extra ...string) []string {
@@ -49,13 +47,9 @@ func TestGoVersionAgreesWithGoMod(t *testing.T) {
 	}
 }
 
-// tool describes where a pinned tool's version is written. Every pattern has
-// one capture group holding the version (or "latest").
 type tool struct {
-	name string
-	// inCI finds the version in ci.yml, the source of truth.
-	inCI func(ci string) string
-	// mention matches a version of the tool anywhere else.
+	name    string
+	inCI    func(ci string) string
 	mention *regexp.Regexp
 }
 
@@ -77,8 +71,6 @@ var tools = []tool{
 	},
 }
 
-// golangciVersionInCI returns the `version:` input of the golangci-lint-action
-// step, ignoring other steps' version: lines.
 func golangciVersionInCI(ci string) string {
 	inStep := false
 	version := regexp.MustCompile(`^\s*version:\s*(v\d+\.\d+\.\d+)`)

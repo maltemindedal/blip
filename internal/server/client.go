@@ -36,12 +36,6 @@ type wsClient struct {
 // newClient creates a new client with the provided WebSocket connection,
 // hub reference, and client address. The client's send channel is buffered
 // to handle message queuing.
-//
-// s is the settings the connection runs under, which in production are hub's
-// own; the size limit and the rate limit both come from it, so the two cannot
-// be taken from different places. Nothing here touches conn or hub, so a test
-// can build a client without either and still get the limiter and the limits
-// the read pump would.
 func newClient(conn *websocket.Conn, hub *Hub, addr string, s *settings) *wsClient {
 	return &wsClient{
 		conn:           conn,

@@ -17,10 +17,6 @@ import (
 	"time"
 )
 
-// newTestService is the one way a test gets a [Service]: built from cfg, with
-// its hub shut down when the test ends. Run and Serve stop the hub themselves,
-// so the cleanup matters to a test that only inspects the service, or that
-// fails before it serves. A nil cfg gives the defaults.
 func newTestService(t *testing.T, cfg *Config) *Service {
 	t.Helper()
 

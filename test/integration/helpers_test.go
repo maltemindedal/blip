@@ -1,7 +1,3 @@
-// This file holds the suite's HTTP and WebSocket plumbing. It is a _test.go file
-// of this package, not a package of its own, so the linter's unused check
-// reports a helper that nothing calls.
-
 package integration
 
 import (
@@ -13,11 +9,8 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// pollInterval is how often waitFor re-evaluates its condition.
 const pollInterval = 5 * time.Millisecond
 
-// waitFor polls cond until it reports true, failing the test if timeout elapses
-// first. Use it instead of sleeping for a duration that "should be enough".
 func waitFor(t *testing.T, timeout time.Duration, what string, cond func() bool) {
 	t.Helper()
 
@@ -32,8 +25,6 @@ func waitFor(t *testing.T, timeout time.Duration, what string, cond func() bool)
 	t.Fatalf("timed out after %v waiting for %s", timeout, what)
 }
 
-// waitForServer polls url until it answers, so a test never races the listener
-// that a just-started server is still opening.
 func waitForServer(t *testing.T, url string, timeout time.Duration) {
 	t.Helper()
 
@@ -48,16 +39,12 @@ func waitForServer(t *testing.T, url string, timeout time.Duration) {
 	})
 }
 
-// response is a fully read HTTP response. makeRequest closes the body before
-// building one, so no test is left holding an open body.
 type response struct {
 	StatusCode  int
 	ContentType string
 	Body        string
 }
 
-// assertStatusCode checks if the HTTP response has the expected status code.
-// It fails the test with a descriptive error message if the status codes don't match.
 func assertStatusCode(t *testing.T, resp response, expected int) {
 	t.Helper()
 	if resp.StatusCode != expected {
@@ -65,8 +52,6 @@ func assertStatusCode(t *testing.T, resp response, expected int) {
 	}
 }
 
-// assertContentType checks if the HTTP response has the expected Content-Type header.
-// It fails the test with a descriptive error message if the content types don't match.
 func assertContentType(t *testing.T, resp response, expected string) {
 	t.Helper()
 	if resp.ContentType != expected {
@@ -74,7 +59,6 @@ func assertContentType(t *testing.T, resp response, expected string) {
 	}
 }
 
-// assertBody checks that the response body is exactly the expected text.
 func assertBody(t *testing.T, resp response, expected string) {
 	t.Helper()
 	if resp.Body != expected {
@@ -82,9 +66,6 @@ func assertBody(t *testing.T, resp response, expected string) {
 	}
 }
 
-// makeRequest creates and executes an HTTP request with a 5-second timeout,
-// reads the whole response, and closes the body. It fails the test if the
-// request cannot be created, executed, or read.
 func makeRequest(t *testing.T, method, url string) response {
 	t.Helper()
 
@@ -115,9 +96,6 @@ func makeRequest(t *testing.T, method, url string) response {
 	}
 }
 
-// connectWebSocket creates a WebSocket connection to the specified URL using the
-// default development origin. It returns the connection or an error if the
-// handshake fails; the caller owns closing it.
 func connectWebSocket(url string) (*websocket.Conn, error) {
 	dialer := websocket.Dialer{
 		HandshakeTimeout: 5 * time.Second,
@@ -133,8 +111,6 @@ func connectWebSocket(url string) (*websocket.Conn, error) {
 	return conn, err
 }
 
-// dialUnregistered opens a WebSocket connection to wsURL presenting origin, failing the test
-// if the handshake does not succeed. The connection is closed when the test ends.
 func dialUnregistered(t *testing.T, wsURL, origin string) *websocket.Conn {
 	t.Helper()
 
@@ -155,8 +131,6 @@ func dialUnregistered(t *testing.T, wsURL, origin string) *websocket.Conn {
 	return conn
 }
 
-// sendMessage sends a JSON message over the WebSocket connection.
-// It marshals the message with a "content" field and sends it as JSON.
 func sendMessage(conn *websocket.Conn, content string) error {
 	message := map[string]string{"content": content}
 	return conn.WriteJSON(message)

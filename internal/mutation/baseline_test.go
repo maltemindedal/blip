@@ -1,6 +1,5 @@
 package mutation
 
-// notYetMutated lists the guard tests that predate the harness. It may only shrink.
 var notYetMutated = map[string]bool{
 	"TestHubBroadcastReachesEveryOtherClient":        true,
 	"TestHubBroadcastSkipsTheSender":                 true,

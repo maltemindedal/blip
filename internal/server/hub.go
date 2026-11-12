@@ -34,35 +34,15 @@ type clientConn interface {
 }
 
 // Hub manages all WebSocket client connections and handles message broadcasting.
-//
-// A Hub has two states, running and stopped, and [startHub] is the only way to
-// get one: it returns with the run loop already launched, so there is no
-// constructed-but-unstarted hub to shut down early, to forget to start, or to
-// block on. [Hub.shutdown] is the only transition. The zero value is still not
-// usable: its channels are never made, so [Hub.ClientCount] on one would block
-// forever. No code path builds one.
-//
-// The set of connected clients is not a field of the Hub. It is a [registry]
-// that lives in a local variable of the run loop, so no other goroutine can
-// name it, let alone touch it: registration, unregistration, fan-out and the
-// count all reach it through the hub's channels.
 type Hub struct {
-	// settings is what every connection of this hub runs under: its origin
-	// allow-list, its message size limit, and its rate limit. It is set once by
-	// [startHub] and never mutated, so the connection paths read it without
-	// synchronization.
 	settings settings
 
 	broadcast     chan broadcastMessage
 	registerReq   chan clientConn
 	unregisterReq chan clientConn
 
-	// countReq carries a reply channel into the run loop so callers can
-	// read the client count without touching the registry themselves.
 	countReq chan chan int
 
-	// wg tracks one goroutine per registered client. Only the run loop adds
-	// to it, so every client that got in before quit closed is waited for.
 	wg sync.WaitGroup
 
 	quit         chan struct{}
@@ -70,10 +50,6 @@ type Hub struct {
 	done         chan struct{}
 }
 
-// startHub builds a hub running under s and launches its run loop. The caller
-// owns stopping it with [Hub.shutdown]: [Service] does that on every way out of
-// Run and Serve, and a test gets its hub from startTestHub, which registers the
-// shutdown. A hub nobody shuts down fails the test binary (see TestMain).
 func startHub(s settings) *Hub {
 	h := &Hub{
 		settings:      s,
@@ -172,8 +148,6 @@ func (h *Hub) IsStopped() bool {
 	}
 }
 
-// run is the hub's event loop. It owns the registry outright: the variable is
-// local to this function, which [startHub] launches exactly once.
 func (h *Hub) run() {
 	defer close(h.done)
 
@@ -188,8 +162,6 @@ func (h *Hub) run() {
 		case client := <-h.registerReq:
 			reg.add(client)
 
-			// Counted here, inside the run loop, so a client that got in
-			// before shutdown was signalled is always one shutdown waits for.
 			h.wg.Go(client.serve)
 
 		case client := <-h.unregisterReq:
@@ -204,17 +176,9 @@ func (h *Hub) run() {
 	}
 }
 
-// registry is the set of connected clients and the fan-out over it. It has no
-// channels and no locks because exactly one goroutine uses a given registry:
-// the hub's run loop keeps its own in a local variable.
 type registry struct {
-	// clients maps every registered client to the inbox it was registered with.
-	// Keeping the channel here rather than asking the client for it per message
-	// is what keeps the fan-out free of interface dispatch.
 	clients map[clientConn]chan<- []byte
 
-	// failed is scratch space reused across broadcasts to avoid allocating a
-	// slice per message.
 	failed []clientConn
 }
 
@@ -222,14 +186,11 @@ func newRegistry() *registry {
 	return &registry{clients: make(map[clientConn]chan<- []byte)}
 }
 
-// add records a client and the inbox the fan-out will send on.
 func (r *registry) add(client clientConn) {
 	r.clients[client] = client.inbox()
 	log().Info("client registered", "addr", client.remoteAddr(), "total_clients", len(r.clients))
 }
 
-// remove forgets a client and closes its inbox. It is a no-op for clients that
-// are already gone, which makes double unregistration safe.
 func (r *registry) remove(client clientConn) {
 	inbox, ok := r.clients[client]
 	if !ok {
@@ -274,8 +235,6 @@ func (r *registry) handleBroadcast(msg broadcastMessage) {
 	}
 }
 
-// closeAll closes every client connection, which unblocks the read pumps so
-// they can exit.
 func (r *registry) closeAll() {
 	for client := range r.clients {
 		client.closeConnection()
@@ -285,10 +244,6 @@ func (r *registry) closeAll() {
 	clear(r.clients)
 }
 
-// shutdown stops the hub and waits for its goroutines: the run loop, which
-// closes every client connection on its way out, and then every client's pumps.
-// It returns once they have finished or when ctx is done, whichever comes
-// first; both waits share the one deadline carried by ctx. It is idempotent.
 func (h *Hub) shutdown(ctx context.Context) error {
 	log().Info("initiating hub shutdown")
 

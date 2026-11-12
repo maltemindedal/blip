@@ -10,7 +10,6 @@ import (
 	"testing"
 )
 
-// docExamples are identifiers the docs use as placeholders, not as references.
 var docExamples = []string{"TestSubjectBehavior"}
 
 // TestDocIdentifiersExist fails when a doc names a test, benchmark, helper or
@@ -56,10 +55,6 @@ type logCall struct {
 
 var slogLevels = []string{"Debug", "Info", "Warn", "Error"}
 
-// codeLogCalls returns the constant first argument of every Debug, Info, Warn
-// or Error call in non-test sources under internal and cmd. A message built at
-// run time (positiveIntFromEnv's "invalid "+name) is not a constant and is
-// skipped.
 func codeLogCalls(t *testing.T) []logCall {
 	t.Helper()
 	var out []logCall

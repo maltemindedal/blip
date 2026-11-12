@@ -126,11 +126,6 @@ func newTestServer(t *testing.T) (*testService, *server.Hub) {
 // newConfiguredTestServer starts a real service on an ephemeral loopback port,
 // configured by customize, so both the client counts and the settings a test
 // observes belong to that test alone. It is stopped when the test ends.
-//
-// New resolves the configuration, so that configuration has to exist before the
-// service does: the listener is opened first and its URL is already on the
-// allow-list when customize runs. A customize that replaces AllowedOrigins
-// outright is testing the allow-list itself, and overrides that.
 func newConfiguredTestServer(t *testing.T, customize func(cfg *server.Config)) (*testService, *server.Hub) {
 	t.Helper()
 

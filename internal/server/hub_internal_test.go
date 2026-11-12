@@ -36,13 +36,6 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-// leakedGoroutines returns the stacks of the goroutines still running this
-// package's code, or "" once there are none. A goroutine that has just been
-// told to stop may need a moment, so it polls until wait has passed.
-//
-// It matches by package path, so it survives a rename of any one function. It
-// does not see a goroutine parked wholly inside another package, such as an
-// http.Server's accept loop.
 func leakedGoroutines(wait time.Duration) string {
 	pkg := reflect.TypeFor[Hub]().PkgPath() + "."
 	deadline := time.Now().Add(wait)
@@ -117,16 +110,11 @@ func drain(f *fakeClient) (got [][]byte, closed bool) {
 // machine.
 const hubShutdownBudget = 5 * time.Second
 
-// startTestHub is the one way a test gets a hub: running under cfg, and shut
-// down when the test ends. A nil cfg gives the hub the defaults.
 func startTestHub(t *testing.T, cfg *Config) *Hub {
 	t.Helper()
 
 	h := startHub(resolveConfig(cfg))
 
-	// A test that fails before its own shutdown must not leave the run loop
-	// running for the rest of the test binary. shutdown is idempotent, so a test
-	// that has already shut h down loses nothing.
 	t.Cleanup(func() {
 		if err := shutdownHub(t, h); err != nil {
 			t.Errorf(shutdownErrorMsg, err)
@@ -160,10 +148,6 @@ func registerFake(t *testing.T, h *Hub, addr string, buffer int) *fakeClient {
 	return c
 }
 
-// newBenchRegistry builds a registry holding n clients added the way the run
-// loop adds them. There is no hub and no goroutine: the registry is the whole
-// fan-out, and the benchmark is the one goroutine using it, which keeps pump
-// scheduling out of the number.
 func newBenchRegistry(n int) (*registry, []*fakeClient) {
 	r := newRegistry()
 	clients := make([]*fakeClient, n)
@@ -190,9 +174,6 @@ func BenchmarkHubBroadcast(b *testing.B) {
 			for b.Loop() {
 				r.handleBroadcast(msg)
 
-				// Drain inline. A benchmark loop outruns any consumer
-				// goroutine, and the registry evicts clients whose buffers
-				// fill, which would shrink the fan-out mid-measurement.
 				for _, c := range clients[1:] {
 					<-c.send
 				}

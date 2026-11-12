@@ -37,21 +37,13 @@ type Config struct {
 	RateLimit      RateLimitConfig
 }
 
-// settings is what a running hub and its connections obey: every value already
-// defaulted and validated, and the origin allow-list held only as the
-// [originPolicy] that enforces it. [resolveConfig] is the one place that builds
-// one. It does not embed [Config], so a raw value cannot be read where a
-// resolved one is meant: past [New], the raw Config is gone
-// (TestRawConfigStopsAtTheBoundary).
 type settings struct {
-	// addr is the listen address in the host:port form [net.Listen] takes.
 	addr           string
 	origins        originPolicy
 	maxMessageSize int64
 	rateLimit      rateLimit
 }
 
-// rateLimit is a resolved [RateLimitConfig]: both values are positive.
 type rateLimit struct {
 	burst  int
 	refill time.Duration
@@ -69,13 +61,6 @@ func defaultConfig() Config {
 	}
 }
 
-// resolveConfig turns the caller's Config into the settings a hub runs under,
-// substituting the default for every value that is unset or invalid. A nil cfg
-// resolves to the defaults. Nothing in the result aliases cfg.
-//
-// A field added to Config has to be read here to have any effect, because no
-// other production code can name Config; TestEveryConfigFieldReachesTheSettings
-// fails for a field this function ignores.
 func resolveConfig(cfg *Config) settings {
 	raw := defaultConfig()
 	if cfg != nil {

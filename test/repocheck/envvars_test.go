@@ -11,9 +11,6 @@ import (
 
 var envName = regexp.MustCompile(`^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+$|^[A-Z]{2,}$`)
 
-// envVarsInCode maps each environment variable the non-test sources read to
-// the file that reads it. A read is a string-literal argument to any call whose
-// function name contains "env" (os.Getenv, positiveIntFromEnv, ...).
 func envVarsInCode(t *testing.T) map[string]string {
 	t.Helper()
 	out := map[string]string{}
@@ -70,7 +67,7 @@ func TestEnvVarsAreMirrored(t *testing.T) {
 
 	mirrors := []struct {
 		file, hint string
-		line       *regexp.Regexp // one capture group: the variable name
+		line       *regexp.Regexp
 	}{
 		{"docs/reference/configuration.md", "a row in the Variables table", regexp.MustCompile("(?m)^\\| `([A-Z][A-Z0-9_]+)`")},
 		{".env.example", "a `NAME=value` line", regexp.MustCompile(`(?m)^([A-Z][A-Z0-9_]+)=`)},
