@@ -13,16 +13,15 @@ internal/server/
 internal/mutation/           # test-only — past mistakes as mutants the guard tests must fail
 test/
 ├── integration/             # package integration — a real Service over real sockets
-│   ├── setup_test.go            # shared plumbing: test services, dialing, assertions
+│   ├── setup_test.go            # shared plumbing: test services, registered dials
+│   ├── helpers_test.go          # shared plumbing: polling, HTTP requests, raw dials, assertions
 │   ├── error_handling_test.go   # read/write error paths, registration accounting
 │   ├── multiclient_test.go      # many clients exchanging messages concurrently
 │   ├── security_test.go         # origin validation, size limits, rate limiting
 │   ├── server_test.go           # health endpoint, full startup path
 │   ├── shutdown_test.go         # graceful shutdown, ordering, clients closed
 │   └── websocket_test.go        # connection lifecycle, broadcasting
-├── repocheck/               # test-only — docs, pins and the Makefile cross-checked against the code
-└── testhelpers/             # helpers the integration suite shares (no tests of its own)
-    └── helpers.go
+└── repocheck/               # test-only — docs, pins and the Makefile cross-checked against the code
 ```
 
 **Unit tests** are package-internal: `x_internal_test.go` covers `x.go` and can reach the package's
@@ -101,26 +100,30 @@ nothing fails a build for dropping coverage.
 
 ## Helpers
 
-`test/testhelpers` provides the integration suite's shared plumbing. Use it instead of hand-rolling
-dials and requests:
+`test/integration/helpers_test.go` holds the integration suite's shared plumbing. Use it instead of
+hand-rolling dials and requests:
 
 | Helper                                            | Purpose                                                             |
 | ------------------------------------------------- | ------------------------------------------------------------------- |
-| `WaitFor(t, timeout, what, cond)`                 | Poll a condition to a deadline — use instead of `time.Sleep`         |
-| `WaitForServer(t, url, timeout)`                  | Block until a just-started server accepts requests                   |
-| `Dial(t, wsURL, origin)`                          | Dial a `ws://` URL from a given `Origin`, closed when the test ends  |
-| `ConnectWebSocket(url)`                           | Dial with the default dev origin; returns an error instead of failing |
-| `SendMessage(conn, content)`                      | Send `{"content": ...}`                                              |
-| `MakeRequest(t, method, url)`                     | HTTP request, fully read; returns a `Response` with the body closed  |
-| `AssertStatusCode` / `AssertContentType` / `AssertBody` | Common assertions over a `Response`                            |
+| `waitFor(t, timeout, what, cond)`                 | Poll a condition to a deadline — use instead of `time.Sleep`         |
+| `waitForServer(t, url, timeout)`                  | Block until a just-started server accepts requests                   |
+| `dialUnregistered(t, wsURL, origin)`              | Dial a `ws://` URL from a given `Origin` without waiting for the hub; closed when the test ends |
+| `connectWebSocket(url)`                           | Dial with the default dev origin; returns an error instead of failing |
+| `sendMessage(conn, content)`                      | Send `{"content": ...}`                                              |
+| `makeRequest(t, method, url)`                     | HTTP request, fully read; returns a `response` with the body closed  |
+| `assertStatusCode` / `assertContentType` / `assertBody` | Common assertions over a `response`                            |
 
-The `integration` package layers its own helpers on top in `setup_test.go` — `newTestServer` (a
+The helpers are unexported functions in a `_test.go` file of the package that uses them, so the
+linter's `unused` check reports one that loses its last caller. An exported helper in a package of
+its own counts as used whether or not anything calls it.
+
+`setup_test.go` layers the service helpers on top — `newTestServer` (a
 real `server.Service` with a hub of its own, on an ephemeral port and the default settings),
 `newConfiguredTestServer` (the same, with a callback that varies the config first — the listener is
 opened before the service is built, so its own origin is already on the allow-list), `startService`
 (the same service started through `Run` on a fixed port, stopped by cancelling its context), `dial` /
 `dialPair` / `dialClients` (which return only once the hub has registered every connection), and
-`waitForUnregister`. Prefer those inside that package: they make client-count assertions exact.
+`waitForUnregister`. Prefer those to a raw dial: they make client-count assertions exact.
 
 ## Writing tests
 
@@ -144,7 +147,7 @@ Follow the conventions already in the suite:
 - Prefer waiting on a channel or polling with a deadline over `time.Sleep` for synchronization. The
   hub's `ClientCount()` is answered by its own event loop, so a reply proves every registration,
   unregistration, and broadcast queued before it has been processed — that is the barrier to wait on,
-  via `testhelpers.WaitFor`. A `time.Sleep` is only acceptable when elapsed wall-clock time is the
+  via `waitFor`. A `time.Sleep` is only acceptable when elapsed wall-clock time is the
   behavior under test and there is no clock to drive by hand; say so in a comment. Prefer giving
   yourself one, the way the rate limiter does: `allow()` reads the clock so production has nothing to
   get wrong, and an `allowAt(now)` beside it takes the instant for the tests. The refill rules are
@@ -191,7 +194,6 @@ failure message names the file to edit and the fix.
 | `TestDocsQuoteLogMsgsExactly`              | Log `msg` strings quoted in docs match the code's capitalization              |
 | `TestEnvVarsAreMirrored`                   | Each env var the code reads appears in the configuration reference, `.env.example`, `docker-compose.yml` and `config_internal_test.go` |
 | `TestInternalTestFilesNameASourceFile`     | `x_test.go` and `x_internal_test.go` sit beside an `x.go`                     |
-| `TestTesthelpersExportsHaveCallers`        | Each exported `test/testhelpers` function has a caller outside the package    |
 
 The package finds the repository root by walking up to `go.mod`, so a compiled test binary checks
 whichever checkout it runs in: `go test -c -o /tmp/repocheck.test ./test/repocheck`, then run it from

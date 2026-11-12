@@ -1,9 +1,8 @@
-// Package testhelpers provides common utilities and helper functions for testing the Blip server.
-//
-// This package contains reusable test utilities for the integration tests. It provides
-// functions for dialing WebSocket connections, waiting on conditions, and asserting response
-// properties to reduce code duplication in test files.
-package testhelpers
+// This file holds the suite's HTTP and WebSocket plumbing. It is a _test.go file
+// of this package, not a package of its own, so the linter's unused check
+// reports a helper that nothing calls.
+
+package integration
 
 import (
 	"io"
@@ -14,12 +13,12 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// pollInterval is how often WaitFor re-evaluates its condition.
+// pollInterval is how often waitFor re-evaluates its condition.
 const pollInterval = 5 * time.Millisecond
 
-// WaitFor polls cond until it reports true, failing the test if timeout elapses
+// waitFor polls cond until it reports true, failing the test if timeout elapses
 // first. Use it instead of sleeping for a duration that "should be enough".
-func WaitFor(t *testing.T, timeout time.Duration, what string, cond func() bool) {
+func waitFor(t *testing.T, timeout time.Duration, what string, cond func() bool) {
 	t.Helper()
 
 	deadline := time.Now().Add(timeout)
@@ -33,13 +32,13 @@ func WaitFor(t *testing.T, timeout time.Duration, what string, cond func() bool)
 	t.Fatalf("timed out after %v waiting for %s", timeout, what)
 }
 
-// WaitForServer polls url until it answers, so a test never races the listener
+// waitForServer polls url until it answers, so a test never races the listener
 // that a just-started server is still opening.
-func WaitForServer(t *testing.T, url string, timeout time.Duration) {
+func waitForServer(t *testing.T, url string, timeout time.Duration) {
 	t.Helper()
 
 	client := &http.Client{Timeout: pollInterval * 10}
-	WaitFor(t, timeout, "server at "+url+" to accept requests", func() bool {
+	waitFor(t, timeout, "server at "+url+" to accept requests", func() bool {
 		resp, err := client.Get(url)
 		if err != nil {
 			return false
@@ -49,44 +48,44 @@ func WaitForServer(t *testing.T, url string, timeout time.Duration) {
 	})
 }
 
-// Response is a fully read HTTP response. MakeRequest closes the body before
+// response is a fully read HTTP response. makeRequest closes the body before
 // building one, so no test is left holding an open body.
-type Response struct {
+type response struct {
 	StatusCode  int
 	ContentType string
 	Body        string
 }
 
-// AssertStatusCode checks if the HTTP response has the expected status code.
+// assertStatusCode checks if the HTTP response has the expected status code.
 // It fails the test with a descriptive error message if the status codes don't match.
-func AssertStatusCode(t *testing.T, resp Response, expected int) {
+func assertStatusCode(t *testing.T, resp response, expected int) {
 	t.Helper()
 	if resp.StatusCode != expected {
 		t.Errorf("Expected status code %d, got %d", expected, resp.StatusCode)
 	}
 }
 
-// AssertContentType checks if the HTTP response has the expected Content-Type header.
+// assertContentType checks if the HTTP response has the expected Content-Type header.
 // It fails the test with a descriptive error message if the content types don't match.
-func AssertContentType(t *testing.T, resp Response, expected string) {
+func assertContentType(t *testing.T, resp response, expected string) {
 	t.Helper()
 	if resp.ContentType != expected {
 		t.Errorf("Expected content type %s, got %s", expected, resp.ContentType)
 	}
 }
 
-// AssertBody checks that the response body is exactly the expected text.
-func AssertBody(t *testing.T, resp Response, expected string) {
+// assertBody checks that the response body is exactly the expected text.
+func assertBody(t *testing.T, resp response, expected string) {
 	t.Helper()
 	if resp.Body != expected {
 		t.Errorf("Expected body %q, got %q", expected, resp.Body)
 	}
 }
 
-// MakeRequest creates and executes an HTTP request with a 5-second timeout,
+// makeRequest creates and executes an HTTP request with a 5-second timeout,
 // reads the whole response, and closes the body. It fails the test if the
 // request cannot be created, executed, or read.
-func MakeRequest(t *testing.T, method, url string) Response {
+func makeRequest(t *testing.T, method, url string) response {
 	t.Helper()
 
 	client := &http.Client{
@@ -109,17 +108,17 @@ func MakeRequest(t *testing.T, method, url string) Response {
 		t.Fatalf("Failed to read response body: %v", err)
 	}
 
-	return Response{
+	return response{
 		StatusCode:  resp.StatusCode,
 		ContentType: resp.Header.Get("Content-Type"),
 		Body:        string(body),
 	}
 }
 
-// ConnectWebSocket creates a WebSocket connection to the specified URL using the
+// connectWebSocket creates a WebSocket connection to the specified URL using the
 // default development origin. It returns the connection or an error if the
 // handshake fails; the caller owns closing it.
-func ConnectWebSocket(url string) (*websocket.Conn, error) {
+func connectWebSocket(url string) (*websocket.Conn, error) {
 	dialer := websocket.Dialer{
 		HandshakeTimeout: 5 * time.Second,
 	}
@@ -134,9 +133,9 @@ func ConnectWebSocket(url string) (*websocket.Conn, error) {
 	return conn, err
 }
 
-// Dial opens a WebSocket connection to wsURL presenting origin, failing the test
+// dialUnregistered opens a WebSocket connection to wsURL presenting origin, failing the test
 // if the handshake does not succeed. The connection is closed when the test ends.
-func Dial(t *testing.T, wsURL, origin string) *websocket.Conn {
+func dialUnregistered(t *testing.T, wsURL, origin string) *websocket.Conn {
 	t.Helper()
 
 	header := http.Header{}
@@ -156,9 +155,9 @@ func Dial(t *testing.T, wsURL, origin string) *websocket.Conn {
 	return conn
 }
 
-// SendMessage sends a JSON message over the WebSocket connection.
+// sendMessage sends a JSON message over the WebSocket connection.
 // It marshals the message with a "content" field and sends it as JSON.
-func SendMessage(conn *websocket.Conn, content string) error {
+func sendMessage(conn *websocket.Conn, content string) error {
 	message := map[string]string{"content": content}
 	return conn.WriteJSON(message)
 }

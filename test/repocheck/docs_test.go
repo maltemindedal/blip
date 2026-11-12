@@ -18,8 +18,8 @@ var docExamples = []string{"TestSubjectBehavior"}
 // the docs did not follow.
 //
 // It sees functions and methods only, and only names that start with Test or
-// Benchmark, follow `testhelpers.`, or end in `(`. A type, constant or field
-// named in prose is not checked.
+// Benchmark, or start with a capital and end in `(`. A type, constant, field or
+// unexported helper named in prose is not checked.
 func TestDocIdentifiersExist(t *testing.T) {
 	t.Parallel()
 	declared := map[string]bool{}
@@ -30,13 +30,12 @@ func TestDocIdentifiersExist(t *testing.T) {
 			}
 		}
 	}
-	ref := regexp.MustCompile("`((?:Test|Benchmark)[A-Z]\\w*|testhelpers\\.[A-Z]\\w*|[A-Z]\\w*\\()")
+	ref := regexp.MustCompile("`((?:Test|Benchmark)[A-Z]\\w*|[A-Z]\\w*\\()")
 	for _, f := range markdownFiles(t) {
 		eachLine(readFile(t, f), func(n int, line string) {
 			for _, m := range ref.FindAllStringSubmatch(line, -1) {
 				name := strings.TrimSuffix(m[1], "(")
-				short := name[strings.LastIndex(name, ".")+1:]
-				if !declared[short] && !slices.Contains(docExamples, short) {
+				if !declared[name] && !slices.Contains(docExamples, name) {
 					t.Errorf("%s:%d names `%s`, which no .go file declares. Edit %s to the identifier's current name, or delete the sentence.", f, n, name, f)
 				}
 			}

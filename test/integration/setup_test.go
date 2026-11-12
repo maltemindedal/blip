@@ -22,7 +22,6 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/maltemindedal/blip/internal/server"
-	"github.com/maltemindedal/blip/test/testhelpers"
 )
 
 const (
@@ -87,7 +86,7 @@ func startService(t *testing.T, port string) *testService {
 	svcTest := launch(svc, addr, svc.Run)
 	t.Cleanup(func() { _ = svcTest.shutdown(t) })
 
-	testhelpers.WaitForServer(t, svcTest.URL()+"/", shutdownBudget)
+	waitForServer(t, svcTest.URL()+"/", shutdownBudget)
 	return svcTest
 }
 
@@ -191,10 +190,10 @@ func dialClients(t *testing.T, hub *server.Hub, wsURL, origin string, n int) []*
 
 	conns := make([]*websocket.Conn, n)
 	for i := range conns {
-		conns[i] = testhelpers.Dial(t, wsURL, origin)
+		conns[i] = dialUnregistered(t, wsURL, origin)
 	}
 
-	testhelpers.WaitFor(t, registerWait, "the hub to register every client", func() bool {
+	waitFor(t, registerWait, "the hub to register every client", func() bool {
 		return hub.ClientCount() >= before+n
 	})
 
@@ -205,7 +204,7 @@ func dialClients(t *testing.T, hub *server.Hub, wsURL, origin string, n int) []*
 func waitForUnregister(t *testing.T, hub *server.Hub, want int) {
 	t.Helper()
 
-	testhelpers.WaitFor(t, registerWait, "the hub to unregister a client", func() bool {
+	waitFor(t, registerWait, "the hub to unregister a client", func() bool {
 		return hub.ClientCount() == want
 	})
 }
