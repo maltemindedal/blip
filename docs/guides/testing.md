@@ -20,6 +20,7 @@ test/
 │   ├── server_test.go           # health endpoint, full startup path
 │   ├── shutdown_test.go         # graceful shutdown, ordering, clients closed
 │   └── websocket_test.go        # connection lifecycle, broadcasting
+├── repocheck/               # test-only — docs, pins and the Makefile cross-checked against the code
 └── testhelpers/             # helpers the integration suite shares (no tests of its own)
     └── helpers.go
 ```
@@ -172,6 +173,34 @@ They assert allocation counts implicitly rather than wall-clock time — the num
 machine, but a path that was allocation-free and stops being so is a regression worth catching. Run
 `go test -bench . -benchmem ./internal/...` before and after a change to the hot path and compare
 the `allocs/op` column.
+
+## Repository checks
+
+`test/repocheck` holds tests about the repository rather than the service. They cross-check facts
+that docs and config copy by hand, and they run with `go test ./...` and in CI's `test` job. Each
+failure message names the file to edit and the fix.
+
+| Check                                      | What it compares                                                              |
+| ------------------------------------------ | ----------------------------------------------------------------------------- |
+| `TestMakefileDocumentedTargetsHaveRules`   | Every `## name:` help comment is followed by its `name:` rule line            |
+| `TestMakefileDryRunsEveryDocumentedTarget` | `make -n <target>` succeeds for each documented target (skipped without make) |
+| `TestToolPinsAgreeWithCI`                  | golangci-lint and govulncheck versions match `ci.yml`; neither is `@latest`   |
+| `TestGoVersionAgreesWithGoMod`             | Go versions named in docs and the Dockerfile match `go.mod`                   |
+| `TestDocIdentifiersExist`                  | Test, benchmark and helper names in docs are declared in some `.go` file      |
+| `TestAlertTableMatchesLogCalls`            | The alert table's `msg` and level match a `slog` call                         |
+| `TestDocsQuoteLogMsgsExactly`              | Log `msg` strings quoted in docs match the code's capitalization              |
+| `TestEnvVarsAreMirrored`                   | Each env var the code reads appears in the configuration reference, `.env.example`, `docker-compose.yml` and `config_internal_test.go` |
+| `TestInternalTestFilesNameASourceFile`     | `x_test.go` and `x_internal_test.go` sit beside an `x.go`                     |
+| `TestTesthelpersExportsHaveCallers`        | Each exported `test/testhelpers` function has a caller outside the package    |
+
+The package finds the repository root by walking up to `go.mod`, so a compiled test binary checks
+whichever checkout it runs in: `go test -c -o /tmp/repocheck.test ./test/repocheck`, then run it from
+the root of a `git archive` of an older commit to replay a past mistake.
+
+A new check goes in the file for its subject (`makefile_test.go`, `versions_test.go`,
+`docs_test.go`, `envvars_test.go`, `testfiles_test.go`), using the helpers in `repo_test.go`. Give it
+a failure message that names the file and the edit. Before merging, break the thing it guards in a
+scratch copy and watch the check fail, and say in its comment what it does not cover.
 
 ## Guard tests and mutants
 

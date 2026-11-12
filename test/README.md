@@ -1,6 +1,7 @@
 # Tests
 
 - `integration/` — a real service over real HTTP/WebSocket sockets
+- `repocheck/` — checks that docs, tool pins and the Makefile match the code
 - `testhelpers/` — shared setup and assertion helpers for the integration suite
 
 The unit tests are package-internal, next to the code they cover: `internal/server/*_internal_test.go`.
